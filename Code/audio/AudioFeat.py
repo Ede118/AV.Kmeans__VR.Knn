@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
-from typing import Tuple
+from typing import Tuple, List
 import scipy.signal as sps
 
 from Code.types import VecF, VecI, MatF, F32, I32, I8
@@ -275,11 +275,13 @@ class AudioFeat:
         hop: int
     ) -> VecF:
     """
-    Devuelve matriz (C, T) con:
-      - C = cfg.n_mfcc  si delta_order == 0
-      - C = 2*cfg.n_mfcc si delta_order == 1 (MFCC + Δ)
-      - C = 3*cfg.n_mfcc si delta_order == 2 (MFCC + Δ + ΔΔ)
-    Siempre sin c0 (energía).
+    ### MFCC y derivadas
+    Calcula MFCC sin c0 y añade Δ/ΔΔ según `cfg.delta_order`.
+    - Devuelve matriz `(C, T)` en `float32`
+    ### Resumen
+    ```
+    mat_mfcc = feat._extract_mfcc(y_proc, sr, win, hop)
+    ```
     """
     n = int(self.cfg.n_mfcc)
 
@@ -308,8 +310,13 @@ class AudioFeat:
         sr: int
     ) -> VecF:
     """
-    y y sr deben venir de AudioPreproc.preprocess(...).
-    Retorna un vector 1D float32 de dimensión fija (p. ej., 168 con tu baseline).
+    ### Vector de características
+    Combina MFCC, RMS y ZCR; aplica pooling y devuelve vector 1D `float64`.
+    - Requiere audio generado por `AudioPreproc.preprocess`
+    ### Resumen
+    ```
+    vec = feat.extract(y_proc, sr)
+    ```
     """
     
     win, hop = self.pre.framing_params()
@@ -327,12 +334,50 @@ class AudioFeat:
 
     # Alinear tiempos por posibles off-by-one entre STFT y framing directo
     T_min = min(p.shape[1] for p in parts)
+    if T_min == 0:
+        raise ValueError("No se pudieron formar cuadros con los parámetros actuales (duración insuficiente).")
     parts = [p[:, :T_min] for p in parts]
     feat_mat = np.concatenate(parts, axis=0)  
 
     # 3) Pooling temporal a vector fijo
-    vec = _pool_stats(feat_mat, self.cfg.stats)  
-    
-    return vec.astype(np.float32)
+    vec = _pool_stats(feat_mat, self.cfg.stats)
+    # Se retorna en float64 para asegurar precisión previa a la estandarización.
+    return np.asarray(vec, dtype=np.float64)
 
+  def _row_feature_names(self) -> List[str]:
+    nombres: List[str] = []
+    n = int(self.cfg.n_mfcc)
+    for i in range(n):
+      nombres.append(f"mfcc_{i+1}")
+    if self.cfg.delta_order >= 1:
+      for i in range(n):
+        nombres.append(f"mfcc_delta_{i+1}")
+      if self.cfg.delta_order >= 2:
+        for i in range(n):
+          nombres.append(f"mfcc_delta2_{i+1}")
+    if self.cfg.add_rms:
+      nombres.append("rms")
+    if self.cfg.add_zcr:
+      nombres.append("zcr")
+    return nombres
 
+  def nombres_de_caracteristicas(
+        self,
+        stats: Tuple[str, ...] | None = None
+    ) -> List[str]:
+    """
+    ### Etiquetas de features
+    Devuelve nombres legibles alineados al vector de salida.
+    - Respeta el orden exacto de `extract`
+    ### Resumen
+    ```
+    nombres = feat.nombres_de_caracteristicas()
+    ```
+    """
+    stats_to_use = stats if stats is not None else self.cfg.stats
+    filas = self._row_feature_names()
+    etiquetas: List[str] = []
+    for stat in stats_to_use:
+      for nombre_base in filas:
+        etiquetas.append(f"{nombre_base}_{stat}")
+    return etiquetas

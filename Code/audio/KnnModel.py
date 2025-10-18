@@ -36,8 +36,13 @@ class KnnModel:
     vecLabel: Sequence[str]      # len N
   ) -> int:
     """
-    Guarda los vectores de train y sus labels.
-    Devuelve N (cantidad de muestras).
+    ### Cargar referencias
+    Almacena embeddings estandarizados y sus etiquetas.
+    - Precalcula normas si la métrica es coseno
+    ### Resumen
+    ```
+    knn.upload_batch(X_std, etiquetas)
+    ```
     """
     X = np.asarray(matParametros, dtype=F32)
     if X.ndim != 2:
@@ -77,9 +82,13 @@ class KnnModel:
         exclude_idx: int | None = None
       ) -> str:
     """
-    x: (D,) YA estandarizado con el mismo Standardizer del train.
-    exclude_idx: opcional, para LOO. Si se da, ignora ese punto del train.
-    Devuelve el label (string).
+    ### Predicción k-NN
+    Asigna una etiqueta a un vector ya estandarizado.
+    - Permite excluir un índice para validación LOO
+    ### Resumen
+    ```
+    etiqueta = knn.predict(x_std)
+    ```
     """
     if self.X is None or self.y_idx is None or self.labels is None:
         raise RuntimeError("Modelo no inicializado. Llama upload_batch() primero.")
@@ -109,7 +118,15 @@ class KnnModel:
       self,
       vecAudio: VecF,
   ) -> VecF:
-    
+    """
+    ### Distancias a la base
+    Calcula distancias (euclidianas o coseno) contra todos los vectores de referencia.
+    - Devuelve `np.ndarray` de tamaño `N`
+    ### Resumen
+    ```
+    distancias = knn._distances(x_std)
+    ```
+    """
     matDB = self.X
     vecAudio: VecF = np.asarray(vecAudio, dtype=F32).reshape(-1)
 
@@ -146,9 +163,13 @@ class KnnModel:
         d: np.ndarray
       ) -> int:
     """
-    d: (N,) distancias a TODOS los puntos de train.
-    Retorna el índice de clase ganador (entero en [0..C-1]).
-    Regla: top-k, pesos 1/(d+eps), desempate por vecino más cercano.
+    ### Votación ponderada
+    Selecciona la clase ganadora con top‑k y pesos 1/(d+eps).
+    - Desempata usando el vecino individual más cercano
+    ### Resumen
+    ```
+    clase = knn._vote(distancias)
+    ```
     """
     if self.X is None or self.y_idx is None or self.labels is None:
         raise RuntimeError("Modelo no inicializado. Llama upload_batch() primero.")
@@ -191,3 +212,53 @@ class KnnModel:
             best_d = d_min_c
             best_c = int(c)
     return best_c
+
+  # -------------------------------------------------------------------------------------------------  #
+  #                                  --------- Alias públicos ---------                               #
+  # -------------------------------------------------------------------------------------------------  #
+
+  def cargar_referencias(
+      self,
+      matParametros: np.ndarray,
+      vecLabel: Sequence[str]
+  ) -> int:
+    """
+    ### Alias en español
+    Delegación a `upload_batch`.
+    ### Resumen
+    ```
+    knn.cargar_referencias(X_std, etiquetas)
+    ```
+    """
+    return self.upload_batch(matParametros, vecLabel)
+
+  def predecir(
+      self,
+      x: np.ndarray,
+      exclude_idx: int | None = None
+  ) -> str:
+    """
+    ### Alias en español
+    Delegación a `predict`.
+    ### Resumen
+    ```
+    etiqueta = knn.predecir(x_std)
+    ```
+    """
+    return self.predict(x, exclude_idx=exclude_idx)
+
+  def distancias(
+      self,
+      vecAudio: VecF,
+  ) -> VecF:
+    """
+    ### Alias en español
+    Delegación a `_distances`.
+    ### Resumen
+    ```
+    dist = knn.distancias(x_std)
+    ```
+    """
+    if self.X is None or self.y_idx is None or self.labels is None:
+      raise RuntimeError("Modelo no inicializado. Llama upload_batch() primero.")
+    return self._distances(vecAudio)

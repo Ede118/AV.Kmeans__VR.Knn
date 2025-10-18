@@ -64,9 +64,16 @@ class AudioPreproc:
             sr: int
         ) -> Tuple[VecF, int]:
         """
-        Pipeline: resample→highpass→pre-énfasis→VAD→normalizar→duración fija.
-        Entra: y (1D), sr original. Sale: y_proc (1D float32), sr=self.cfg.target_sr.
+        ### Preprocesamiento completo
+        Resamplea, filtra, realza, aplica VAD, normaliza y ajusta la duración.
+        - Entrada: señal mono (`np.ndarray`) y sample rate original
+        - Salida: audio limpio (`float32`) y sample rate objetivo (`cfg.target_sr`)
+        ### Resumen
+        ```
+        audio_proc, sr_out = preproc.preprocess(y, sr_in)
+        ```
         """
+        
         y = np.asarray(y, dtype=F32).squeeze()
         if y.ndim != 1:
             raise ValueError("Se espera audio mono 1D; convierte a mono antes o usa _resample_mono")
@@ -106,13 +113,29 @@ class AudioPreproc:
         return y.astype(F32, copy=False), sr
 
     def process_path(self, path: str | Path) -> Tuple[VecF, int]:
-        """Load a WAV file, run the preprocessing pipeline, and return the cleaned signal."""
+        """
+        ### Preprocesar desde disco
+        Lee un WAV y ejecuta el pipeline de preprocesamiento.
+        - Retorna audio procesado y sample rate objetivo
+        ### Resumen
+        ```
+        audio_proc, sr_out = preproc.process_path("voz.wav")
+        ```
+        """
         sr, y = self._load_wav(path)
         y_proc, sr_proc = self.preprocess(y, sr)
         return y_proc, sr_proc
 
     def framing_params(self) -> Tuple[int, int]:
-        """Convierte frame_ms/hop_ms a muestras usando target_sr."""
+        """
+        ### Ventana y hop
+        Convierte `frame_ms` y `hop_ms` a muestras según `cfg.target_sr`.
+        - Devuelve `(win_muestras, hop_muestras)`
+        ### Resumen
+        ```
+        win, hop = preproc.framing_params()
+        ```
+        """
         sr = int(self.cfg.target_sr)
         win = max(1, int(round(sr * self.cfg.frame_ms / 1000.0)))
         hop = max(1, int(round(sr * self.cfg.hop_ms  / 1000.0)))
@@ -128,7 +151,15 @@ class AudioPreproc:
         sr_in: int, 
         sr_out: int
         ) -> VecF:
-        """Resample con polyphase. Si ya está en sr_out, devuelve copia."""
+        """
+        ### Resampleo mono
+        Ajusta la señal a `sr_out` con `resample_poly`.
+        - Solo reprocesa si `sr_in != sr_out`
+        ### Resumen
+        ```
+        y_rs = AudioPreproc._resample_mono(y, 44100, 16000)
+        ```
+        """
         if sr_in == sr_out:
             return y.astype(F32, copy=False)
         # rational approximation
@@ -147,7 +178,15 @@ class AudioPreproc:
         f0: float, 
         order: int = 4
         ) -> VecF:
-        """Butter high-pass en SOS para estabilidad."""
+        """
+        ### Filtro pasa-alto
+        Elimina rumble con un Butterworth en forma SOS.
+        - Controlado por `f0` y `order`
+        ### Resumen
+        ```
+        y_hp = AudioPreproc._highpass(y, 16000, 40.0, order=2)
+        ```
+        """
         nyq = 0.5 * sr
         wc = max(1.0, f0) / nyq
         wc = min(wc, 0.999)
@@ -162,8 +201,13 @@ class AudioPreproc:
         a: float = 0.97
         ) -> VecF:
         """
-        Pre-énfasis estándar: y[n] = x[n] − a x[n−1].
-        Nota: realza ALTAS frecuencias; no “recupera” 40–60 Hz.
+        ### Pre-énfasis
+        Aplica `y[n] = x[n] - a·x[n-1]` para realzar altas frecuencias.
+        - Conserva la nota original sobre el realce de altas frecuencias
+        ### Resumen
+        ```
+        y_pe = AudioPreproc._pre_emphasis(y, 0.97)
+        ```
         """
         if y.size == 0:
             return y
@@ -184,10 +228,13 @@ class AudioPreproc:
         expand_ms: float = 60.0
     ) -> VecF:
         """
-        VAD minimalista por energía:
-          1) RMS por frames (win_ms, hop_ms de cfg) → dBFS
-          2) Umbral + limpieza de segmentos cortos
-          3) Expansión (histeresis simple) y recorte resultante
+        ### VAD simple
+        Detecta y recorta silencios con un umbral de energía RMS.
+        - Aplica limpieza de segmentos cortos y expansión temporal
+        ### Resumen
+        ```
+        y_vad = preproc._simple_vad(y, sr, thresh_db=-35, win_ms=20, min_ms=120, expand_ms=60)
+        ```
         """
         win = max(1, int(round(sr * win_ms / 1000.0)))
         hop = max(1, int(round(sr * self.cfg.hop_ms / 1000.0)))  # usa hop global para coherencia
@@ -260,7 +307,15 @@ class AudioPreproc:
         max_gain_db: float = 18.0,
         gate_dbfs: float = -60.0
     ) -> VecF:
-        """Normaliza por pico o RMS en dBFS, con límite de ganancia."""
+        """
+        ### Normalización de nivel
+        Ajusta el volumen por pico o RMS con límites de ganancia.
+        - Respeta `gate_dbfs` para evitar subir ruidos muy bajos
+        ### Resumen
+        ```
+        y_norm = AudioPreproc._normalize(y, mode="rms", rms_target_dbfs=-20)
+        ```
+        """
         y = y.astype(F32, copy=False)
         eps = 1e-12
 
@@ -296,7 +351,15 @@ class AudioPreproc:
         pad_mode: str = "edge",
         center_crop: bool = False
     ) -> VecF:
-        """Ajusta a duración fija: recorta si sobra, paddea si falta."""
+        """
+        ### Duración fija
+        Recorta o rellena la señal para alcanzar `t_sec`.
+        - Soporta modos de padding (`edge`, `constant`, `reflect`)
+        ### Resumen
+        ```
+        y_pad = AudioPreproc._fix_duration(y, sr, 1.2, pad_mode="edge")
+        ```
+        """
         y = y.astype(F32, copy=False)
         N = int(round(sr * t_sec))
         if N <= 0:
@@ -349,6 +412,3 @@ class AudioPreproc:
         else:
             arr = arr.astype(np.float32)
         return np.clip(arr, -1.0, 1.0).astype(np.float32, copy=False)
-
-
-

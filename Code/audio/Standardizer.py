@@ -20,8 +20,13 @@ class Standardizer:
         X: np.ndarray
         ) -> "Standardizer":
         """
-        X: (N, D) float-like
-        Calcula mu y sigma por columna. Devuelve self.
+        ### Ajuste de estadísticas
+        Calcula media y desvío por columna sobre una matriz `(N, D)`.
+        - Almacena los valores internos en `float32`
+        ### Resumen
+        ```
+        stats.calculate_statistics(X_train)
+        ```
         """
         X = np.asarray(X, dtype=F32)
         
@@ -50,7 +55,13 @@ class Standardizer:
         X: MatF
         ) -> MatF:
         """
-        X: (N, D) o (D,) → retorna mismas shapes estandarizadas.
+        ### Z-score por lote
+        Estandariza arrays 1D o 2D usando las estadísticas almacenadas.
+        - Devuelve resultado en `float32`
+        ### Resumen
+        ```
+        X_std = stats.transform(X)
+        ```
         """
         self._check()
         
@@ -69,7 +80,12 @@ class Standardizer:
         x: VecF
         ) -> VecF:
         """
-        x: (D,) → (D,)
+        ### Z-score vectorial
+        Normaliza un único vector `(D,)` con mu y sigma ajustados.
+        ### Resumen
+        ```
+        x_std = stats.transform_one(x)
+        ```
         """
 
         self._check()
@@ -85,7 +101,13 @@ class Standardizer:
         X: MatF
         ) -> MatF:
         """
-        Revierte el z-score: X = X'*sigma + mu
+        ### Deshacer Z-score
+        Reconstruye valores originales desde datos estandarizados.
+        - Compatible con entradas 1D o 2D
+        ### Resumen
+        ```
+        X_orig = stats.inverse_transform(X_std)
+        ```
         """
         self._check()
         X = np.asarray(X, dtype=F32)
@@ -101,7 +123,12 @@ class Standardizer:
         path: str
         ) -> None:
         """
-        Guarda mu y sigma en .npz comprimido.
+        ### Guardar estadísticas
+        Persiste mu y sigma en un archivo `.npz` comprimido.
+        ### Resumen
+        ```
+        stats.save("audio_stats.npz")
+        ```
         """
         self._check()
         np.savez_compressed(path, mu=self.mu, sigma=self.sigma)
@@ -112,9 +139,48 @@ class Standardizer:
         path: str
         ) -> "Standardizer":
         """
-        Carga desde .npz y devuelve una instancia lista para usar.
+        ### Cargar estadísticas
+        Restaura mu y sigma desde un `.npz` y devuelve una instancia lista.
+        ### Resumen
+        ```
+        stats = Standardizer.load("audio_stats.npz")
+        ```
         """
         data = np.load(path)
         mu = data["mu"].astype(F32)
         sigma = data["sigma"].astype(F32)
         return cls(mu=mu, sigma=sigma)
+
+    # --- alias en español ---
+    def ajustar_estadisticas(self, X: np.ndarray) -> "Standardizer":
+        """
+        ### Alias en español
+        Delegación a `calculate_statistics`.
+        ### Resumen
+        ```
+        stats.ajustar_estadisticas(X)
+        ```
+        """
+        return self.calculate_statistics(X)
+
+    def transformar(self, X: MatF) -> MatF:
+        """
+        ### Alias en español
+        Delegación a `transform`.
+        ### Resumen
+        ```
+        X_std = stats.transformar(X)
+        ```
+        """
+        return self.transform(X)
+
+    def transformar_uno(self, x: VecF) -> VecF:
+        """
+        ### Alias en español
+        Delegación a `transform_one`.
+        ### Resumen
+        ```
+        x_std = stats.transformar_uno(x)
+        ```
+        """
+        return self.transform_one(x)
