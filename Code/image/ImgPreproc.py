@@ -19,6 +19,8 @@ class ImgPreprocCfg:
     open_ksize: int = 3                        # > 0 --> no aplicar apertura
     close_ksize: int = 0                       # 0 --> no rellenar huecos
     seg_min_area: float = 0.002                  # área mínima en px para aceptar un blob
+    crop_to_bbox: bool = False
+    crop_margin: int = 2
 
 # ---  B) Procesador (conducta)  --- #
 
@@ -28,7 +30,7 @@ class ImgPreproc:
     cfg: ImgPreprocCfg = field(default_factory=ImgPreprocCfg)
 
 
-    # -------------------------------------------------------------------------------------------------  #
+	# -------------------------------------------------------------------------------------------------  #
 
     def process(self,
             img_bgr: ColorImageU8, 
@@ -307,5 +309,21 @@ class ImgPreproc:
         
         return mask
 
+    # ------------------------------------------------------------------------------------------------- #
 
+    def _crop_to_mask(
+        self,
+        img: np.ndarray,
+        mask: np.ndarray,
+        *,
+        margin: int = 0
+    ) -> tuple[np.ndarray, np.ndarray]:
+        if cv2.countNonZero(mask) == 0:
+            return img, mask
+        x, y, w, h = cv2.boundingRect(mask)
+        x0 = max(0, x - margin)
+        y0 = max(0, y - margin)
+        x1 = min(img.shape[1], x + w + margin)
+        y1 = min(img.shape[0], y + h + margin)
+        return img[y0:y1, x0:x1], mask[y0:y1, x0:x1]
 
