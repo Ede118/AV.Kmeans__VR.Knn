@@ -11,6 +11,23 @@ from Code.types import ColorImageU8, GrayImageF32, MaskU8
 # ---  A) Config   --- #
 @dataclass(slots=True)
 class ImgPreprocCfg:
+    """
+    ### Clase de Configuración
+    Configuración de preprocesamiento de imágenes.
+
+    ### Atributos:
+    - `target_size`: par (alto, ancho) final tras el resize/padding.
+    - `keep_aspect`: si es True mantiene proporción y rellena con bordes.
+    - `to_gray`: convierte BGR→Gray antes de continuar.
+    - `normalize_kind`: política fotométrica ('none' | 'zero_one' | 'zscore').
+    - `blur_ksize`: tamaño impar del kernel Gaussiano (0 desactiva).
+    - `open_ksize`: kernel de apertura morfológica; 0 desactiva.
+    - `close_ksize`: kernel de cierre morfológico; 0 desactiva.
+    - `seg_min_area`: área mínima relativa (0–1) para conservar blobs.
+    - `crop_to_bbox`: recorta imagen/máscara al bounding box mayor.
+    - `crop_margin`: margen en píxeles que se preserva alrededor del recorte.
+    """
+	
     target_size: Tuple[int, int] = (128, 128)  # (H, W)
     keep_aspect: bool = True                   # respeta aspecto y hace pad centrado
     to_gray: bool = True                       # BGR --> Gray
@@ -18,19 +35,38 @@ class ImgPreprocCfg:
     blur_ksize: int = 0                        # 0 = sin blur; si >1, se fuerza impar
     open_ksize: int = 3                        # > 0 --> no aplicar apertura
     close_ksize: int = 0                       # 0 --> no rellenar huecos
-    seg_min_area: float = 0.002                  # área mínima en px para aceptar un blob
-    crop_to_bbox: bool = False
+    seg_min_area: float = 0.002                # área mínima en px para aceptar un blob
+    crop_to_bbox: bool = True 				   # recortar al bbox del objeto segmentado
     crop_margin: int = 2
 
 # ---  B) Procesador (conducta)  --- #
 
 @dataclass(slots=True)
 class ImgPreproc:
-    # Constructor default: crea el objeto con las configuraciones del objeto "PreprocCfg"
+    """
+    ### Pipeline de preprocesamiento geométrico y fotométrico.
+    
+    ### Uso:
+	```
+    pre = ImgPreproc()
+    img = cv2.imread("ruta.png")
+    img_norm, mask = pre.process(img)
+    ```
+    
+    ### Resonsabilidades:
+    - Aplicar conversiones básicas (gris, blur).
+    - Segmentar el objeto principal y generar máscara.
+    - Recortar opcionalmente al bounding box.
+    - Ajustar tamaño mediante resize/pad.
+    - Normalizar intensidades según configuración.
+    
+    La instancia expone métodos auxiliares (`normalize`, `segment`, etc.)
+    para integrar pasos específicos dentro de otros pipelines de visión.
+    """
     cfg: ImgPreprocCfg = field(default_factory=ImgPreprocCfg)
 
 
-	# -------------------------------------------------------------------------------------------------  #
+    # -------------------------------------------------------------------------------------------------  #
 
     def process(self,
             img_bgr: ColorImageU8, 
@@ -39,22 +75,49 @@ class ImgPreproc:
             ) -> tuple[GrayImageF32, MaskU8]:
         """
         ### Método principal
-        Se inserta una un array y devuelve una tupla
-        - Imagen en grises normalizada (reshape, cut borders) 
-        - Máscara de [0..255] 
+        Normaliza y segmenta una imagen para consumo de features.
+        - Convierte a gris si `cfg.to_gray` y aplica blur gaussiano opcional
+        - Segmenta el objeto y recorta al bounding box si `cfg.crop_to_bbox`
+        - Redimensiona/pad a `cfg.target_size`
+        - Normaliza intensidades según `cfg.normalize_kind`
+        - Devuelve imagen `float32` y máscara (`float32` {0,1} si `float_mask`, si no `uint8` {0,255})
         ### Resumen
-        
         ```
         pre = ImgPreproc()
-        paths: Path = getPath() #Funcion ficticia
-        img = cv2.imread(p)
-        Imagen_gris, Mascara = pre.process(img)
+        img = cv2.imread("ruta.png")
+        img_norm, mask = pre.process(img, float_mask=True)
         ```
         """
-        img = self.normalize(img_bgr)
-        mask = self.segment(img)                    # uint8 {0,255}
+        img = img_bgr
+        if self.cfg.to_gray and img.ndim == 3:
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+        if self.cfg.blur_ksize and self.cfg.blur_ksize > 1:
+            k = self.cfg.blur_ksize | 1  # aseguramos impar
+            img = cv2.GaussianBlur(img, (k, k), 0)
+        
+        mask = self.segment(self._normalize_values(img, self.cfg.normalize_kind))
+        
+        if self.cfg.crop_to_bbox:
+            img, mask = self._crop_to_mask(img, mask, margin=self.cfg.crop_margin)
+
+        img = self._resize_pad(img, self.cfg.target_size, self.cfg.keep_aspect)
+        mask = self._resize_pad(mask, self.cfg.target_size, self.cfg.keep_aspect, is_mask=True)
+
+        img = self._normalize_values(img, self.cfg.normalize_kind)
+        img = img.astype(np.float32, copy=False)
+        imin = float(img.min(initial=0.0))
+        imax = float(img.max(initial=1.0))
+        if imax > 1.0 or imin < 0.0:
+            img = ((img - imin) / (imax - imin + 1e-6)).astype(np.float32, copy=False)
+        else:
+            img = np.clip(img, 0.0, 1.0).astype(np.float32, copy=False)
+        
         if float_mask:
             mask = (mask > 0).astype(np.float32)    # {0,1} float32
+        else:
+            mask = mask.astype(np.uint8, copy=False)
+
         return img, mask
 
     # --------- API pública --------- #
@@ -98,7 +161,14 @@ class ImgPreproc:
         # 4) Normalización fotométrica
         x = self._normalize_values(x, self.cfg.normalize_kind)
 
-        return x.astype(np.float32)
+        x = x.astype(np.float32, copy=False)
+        xmin = float(x.min(initial=0.0))
+        xmax = float(x.max(initial=1.0))
+        if xmax > 1.0 or xmin < 0.0:
+            x = ((x - xmin) / (xmax - xmin + 1e-6)).astype(np.float32, copy=False)
+        else:
+            x = np.clip(x, 0.0, 1.0).astype(np.float32, copy=False)
+        return x
 
     # -------------------------------------------------------------------------------------------------  #
 
@@ -174,7 +244,9 @@ class ImgPreproc:
             self, 
             x: np.ndarray, 
             target: Tuple[int, int], 
-            keep_aspect: bool
+            keep_aspect: bool,
+            *,
+            is_mask: bool = False
             ) -> np.ndarray:
         """
         ### Redimensionado con padding
@@ -190,11 +262,12 @@ class ImgPreproc:
         """
         
         H, W = target
+        interpolation = cv2.INTER_NEAREST if is_mask else cv2.INTER_AREA
         if keep_aspect:
             ih, iw = x.shape[:2]
             s = min(H / ih, W / iw)
             nh, nw = max(1, int(ih * s)), max(1, int(iw * s))
-            x = cv2.resize(x, (nw, nh), interpolation=cv2.INTER_AREA)
+            x = cv2.resize(x, (nw, nh), interpolation=interpolation)
             top  = (H - nh) // 2
             left = (W - nw) // 2
             bot  = H - nh - top
@@ -203,7 +276,7 @@ class ImgPreproc:
             x = cv2.copyMakeBorder(x, top, bot, left, right, cv2.BORDER_CONSTANT, value=padval)
             return x
         else:
-            return cv2.resize(x, (W, H), interpolation=cv2.INTER_AREA)
+            return cv2.resize(x, (W, H), interpolation=interpolation)
 
     # -------------------------------------------------------------------------------------------------  #
 
@@ -250,7 +323,6 @@ class ImgPreproc:
         ```
         """
 
-        
         if x.dtype == np.uint8:
             return x
         xmax = float(x.max())
@@ -326,4 +398,3 @@ class ImgPreproc:
         x1 = min(img.shape[1], x + w + margin)
         y1 = min(img.shape[0], y + h + margin)
         return img[y0:y1, x0:x1], mask[y0:y1, x0:x1]
-

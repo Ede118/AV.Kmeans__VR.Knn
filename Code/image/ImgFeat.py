@@ -4,19 +4,32 @@ from typing import Literal
 
 
 from Code.types import MaskU8, VecF, GrayImageF32
-from .KmeansModel import KMeans
 
 class ImgFeat(object):
-
     """
-    :version:
-    :author:
+    ### Explicación
+    Extractor de características geométricas/fotométricas para objetos segmentados.
+    
+    Usa la imagen normalizada y la máscara asociada (producidas por `ImgPreproc`)
+    para construir vectores de features que alimentan modelos de clustering o clasificación.
+    
+    ### Métodos principales:
+    
+    - `shape_vector`: arma un descriptor compacto (3D o 5D) con huecos, circularidad,
+      vértices, rugosidad y gradiente.
+    - `contar_huecos`, `contar_vertices`, `circularidad`, `rugosidad`, `gradiente_interno`:
+      calculan métricas atómicas reutilizables en otros pipelines.
+    - `feature_names`: devuelve etiquetas legibles para cada componente del descriptor.
+    
+    Las entradas (`img_norm`, `mask`) deben estar alineadas y en escala 0..1 (imagen)
+    y {0,1}/{0,255} (máscara). Cada helper robustifica la máscara para tolerar ambos rangos.
     """
 
 
     def shape_vector(self,
-            img_norm: MaskU8,
-            mask: GrayImageF32,
+            img_norm: GrayImageF32,
+            mask: MaskU8,
+            mask_type: Literal['binary', 'zero_one'] = 'binary',
             dim: Literal['3D', '5D'] = '5D',
             usar_gradiente_en_3D: bool = True) -> VecF:
         """
@@ -63,9 +76,17 @@ class ImgFeat(object):
         # Asegurar tipos esperados
         img = img_norm.astype(np.float32, copy=False)
         m = mask
+
+        # Binariza la máscara si es necesario
         if m.dtype != np.uint8 or (m.max() not in (1, 255)):
             # re-binariza por si viene en {0,1} o con grises
-            m = (m > 127).astype(np.uint8) * 255
+            if mask_type == 'binary':
+                m = (m > 127).astype(np.uint8) * 255
+            else:  # 'zero_one'
+                m = (m > 0).astype(np.uint8) * 255
+        if m.dtype == np.uint8 and m.max() == 1:
+            m = (m > 0).astype(np.uint8) * 255
+
 
         # --- calcular features atómicas ---
         # Asumimos que estas funciones existen en este módulo/clase:
@@ -121,8 +142,7 @@ class ImgFeat(object):
         """
 
 
-        m = (mask == 255).astype('uint8')  # 0/1
-        m *= 255                           # {0,255}
+        m = (mask > 0).astype('uint8') * 255
 
         contours, hier = cv2.findContours(m, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
         if hier is None or len(contours) == 0:
@@ -155,7 +175,7 @@ class ImgFeat(object):
         """
         # 0) Asegurar binario uint8 {0,255}
         if mask.dtype != np.uint8 or (mask.max() not in (1, 255)):
-            m = (mask > 127).astype(np.uint8) * 255
+            m = (mask > 0).astype(np.uint8) * 255
         else:
             # normalizar por si hay 1/0 en vez de 255/0
             m = (mask > 0).astype(np.uint8) * 255
@@ -248,7 +268,7 @@ class ImgFeat(object):
         """
 
 
-        m = (mask == 255).astype(np.uint8) * 255
+        m = (mask > 0).astype(np.uint8) * 255
         if cv2.countNonZero(m) == 0:
             return 0.0
 
@@ -300,7 +320,7 @@ class ImgFeat(object):
             img = img_norm
 
         # 1) interior puro: erosión leve para sacar el borde externo
-        m = (mask == 255).astype(np.uint8) * 255  # blindaje por si viene 0/1
+        m = (mask > 0).astype(np.uint8) * 255  # blindaje por si viene 0/1
         if erosion_iters > 0:
             k = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
             m_in = cv2.erode(m, k, iterations=erosion_iters)
@@ -349,3 +369,9 @@ class ImgFeat(object):
         # 3D
         return base + (["gradiente"] if usar_gradiente_en_3D else ["rugosidad"])
 
+    def nombres_de_caracteristicas(
+        self,
+        dim: str = "5D",
+        usar_gradiente_en_3D: bool = True
+        ) -> list[str]:
+        return self.feature_names(dim=dim, usar_gradiente_en_3D=usar_gradiente_en_3D)
