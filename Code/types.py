@@ -1,6 +1,15 @@
 import numpy as np
 import numpy.typing as npt
 from typing import TypeAlias, Final
+from pathlib import Path
+
+# Raíz del proyecto
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+"""
+Tener cuidado con imports circulares.
+Si este archivo se importa en otros módulos del proyecto,
+asegurarse de no importar esos módulos aquí.
+"""
 
 # Dtypes abreviados (no pises "float" nativo)
 F64: TypeAlias = np.float64

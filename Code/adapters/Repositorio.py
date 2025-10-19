@@ -33,15 +33,16 @@ class Repo:
         Create the default directory structure if missing.
         """
         for rel in (
-            "data/images",
-            "data/audio",
-            "data/splits",
-            "data/indexes",
-            "models/vision",
-            "models/audio",
-            "runs",
-            "cfg",
-            "tmp",
+            "DataBase/data/images1",
+            "DataBase/data/images2",
+            "DataBase/data/audio",
+            "DataBase/data/splits",
+            "DataBase/data/indexes",
+            "DataBase/models/vision",
+            "DataBase/models/audio",
+            "DataBase/runs",
+            "DataBase/cfg",
+            "DataBase/tmp",
         ):
             (self.root / rel).mkdir(parents=True, exist_ok=True)
 
@@ -57,7 +58,7 @@ class Repo:
         if number not in {"1", "2"}:
             raise ValueError("No existe ese dataset.")
         
-        base = self.root / "data" / f"images{number}"
+        base = self.root / "DataBase" / "data" / f"images{number}"
         if not base.exists():
             return []
 
@@ -101,14 +102,24 @@ class Repo:
         train: float = 0.7,
         val: float = 0.15,
         seed: int = 123,
+        dataset: Literal["1", "2", "audio"] = "1",
     ) -> Dict[str, int]:
         """
         Create basic train/val/test splits and persist them under `data/splits`.
         """
         if modality not in {"vision", "audio"}:
             raise ValueError("modality debe ser 'vision' o 'audio'")
+        if not (0.0 < train < 1.0) or not (0.0 <= val < 1.0) or train + val >= 1.0:
+            raise ValueError("Los ratios de train/val deben ser mayores a 0 y su suma menor a 1.")
 
-        files = self.list_images() if modality == "vision" else self.list_audio()
+        if modality == "vision":
+            files = self.list_images(number=dataset if dataset in {"1", "2"} else "1")
+            if not files:
+                raise RuntimeError(f"No se encontraron imágenes en data/images{dataset}.")
+        else:
+            files = self.list_audio()
+            if not files:
+                raise RuntimeError("No se encontraron archivos de audio en data/audio.")
 
         rng = random.Random(seed)
         rng.shuffle(files)
@@ -279,7 +290,7 @@ class Repo:
                 fmt="%.6f",
             )
         if predictions is not None:
-            (base / "predictions_images.csv").write_text(
+            (base / "predictions.csv").write_text(
                 "pred\n" + "\n".join(predictions),
                 encoding="utf-8",
             )

@@ -1,415 +1,424 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, field
-from typing import Tuple, Literal
+from typing import Literal, Optional, Tuple
+
 import cv2
 import numpy as np
 
-NormKind = Literal['none','zero_one','zscore']
-
-from Code.types import ColorImageU8, GrayImageF32, MaskU8
+from Code.types import ColorImageU8, MaskU8
 
 
-# ---  A) Config   --- #
+@dataclass(slots=True)
+class SegMeta:
+    """Metadata geométrica resultante de la segmentación y el recorte."""
+
+    contour: np.ndarray
+    rect: tuple
+    centroid: tuple[float, float]
+    inertia_ratio: float
+    aspect_ratio: float
+    circularity: float
+    holes: int
+    M_warp: np.ndarray
+
+
+@dataclass(slots=True)
+class PreprocOutput:
+    """Salida canónica del preprocesamiento de imágenes."""
+
+    img: np.ndarray
+    mask: MaskU8
+    meta: Optional[SegMeta]
+
+
 @dataclass(slots=True)
 class ImgPreprocCfg:
     """
-    ### Clase de Configuración
-    Configuración de preprocesamiento de imágenes.
+    Configuración del pipeline de preprocesamiento.
 
-    ### Atributos:
-    - `target_size`: par (alto, ancho) final tras el resize/padding.
-    - `keep_aspect`: si es True mantiene proporción y rellena con bordes.
-    - `to_gray`: convierte BGR→Gray antes de continuar.
-    - `normalize_kind`: política fotométrica ('none' | 'zero_one' | 'zscore').
-    - `blur_ksize`: tamaño impar del kernel Gaussiano (0 desactiva).
-    - `open_ksize`: kernel de apertura morfológica; 0 desactiva.
-    - `close_ksize`: kernel de cierre morfológico; 0 desactiva.
-    - `seg_min_area`: área mínima relativa (0–1) para conservar blobs.
-    - `crop_to_bbox`: recorta imagen/máscara al bounding box mayor.
-    - `crop_margin`: margen en píxeles que se preserva alrededor del recorte.
+    La intención es replicar la lógica de `tests/test_image_ImgPreproc.py`
+    removiendo cualquier preocupación de visualización.
     """
-	
-    target_size: Tuple[int, int] = (128, 128)  # (H, W)
-    keep_aspect: bool = True                   # respeta aspecto y hace pad centrado
-    to_gray: bool = True                       # BGR --> Gray
-    normalize_kind: NormKind = 'zero_one'      # fotometría: none | zero_one | zscore
-    blur_ksize: int = 0                        # 0 = sin blur; si >1, se fuerza impar
-    open_ksize: int = 3                        # > 0 --> no aplicar apertura
-    close_ksize: int = 0                       # 0 --> no rellenar huecos
-    seg_min_area: float = 0.002                # área mínima en px para aceptar un blob
-    crop_to_bbox: bool = True 				   # recortar al bbox del objeto segmentado
-    crop_margin: int = 2
 
-# ---  B) Procesador (conducta)  --- #
+    target_size: Tuple[int, int] = (256, 256)
+    keep_aspect: bool = True
+    illum_sigma: float = 35.0
+    use_adaptive: bool = False
+    open_ksize: int = 3
+    close_ksize: int = 3
+    min_area_ratio: float = 0.0005
+    penalize_border: bool = True
+    pad_ratio: float = 0.12
+    rotate_crop_mode: Literal["auto", "square", "rect", "none"] = "auto"
+    return_meta: bool = True
+
 
 @dataclass(slots=True)
 class ImgPreproc:
     """
-    ### Pipeline de preprocesamiento geométrico y fotométrico.
-    
-    ### Uso:
-	```
-    pre = ImgPreproc()
-    img = cv2.imread("ruta.png")
-    img_norm, mask = pre.process(img)
-    ```
-    
-    ### Resonsabilidades:
-    - Aplicar conversiones básicas (gris, blur).
-    - Segmentar el objeto principal y generar máscara.
-    - Recortar opcionalmente al bounding box.
-    - Ajustar tamaño mediante resize/pad.
-    - Normalizar intensidades según configuración.
-    
-    La instancia expone métodos auxiliares (`normalize`, `segment`, etc.)
-    para integrar pasos específicos dentro de otros pipelines de visión.
+    Pipeline de preprocesamiento geométrico y fotométrico.
+
+    - Normaliza iluminación.
+    - Segmenta el objeto dominante.
+    - Estima geometría para un recorte alineado.
+    - Devuelve imagen y máscara ya redimensionadas a `target_size`.
     """
+
     cfg: ImgPreprocCfg = field(default_factory=ImgPreprocCfg)
 
-
-    # -------------------------------------------------------------------------------------------------  #
-
-    def process(self,
-            img_bgr: ColorImageU8, 
-            *, 
-            float_mask: bool = True
-            ) -> tuple[GrayImageF32, MaskU8]:
+    # ------------------------------------------------------------------ #
+    # API pública
+    # ------------------------------------------------------------------ #
+    def process(self, img_bgr: ColorImageU8) -> PreprocOutput:
         """
-        ### Método principal
-        Normaliza y segmenta una imagen para consumo de features.
-        - Convierte a gris si `cfg.to_gray` y aplica blur gaussiano opcional
-        - Segmenta el objeto y recorta al bounding box si `cfg.crop_to_bbox`
-        - Redimensiona/pad a `cfg.target_size`
-        - Normaliza intensidades según `cfg.normalize_kind`
-        - Devuelve imagen `float32` y máscara (`float32` {0,1} si `float_mask`, si no `uint8` {0,255})
-        ### Resumen
-        ```
-        pre = ImgPreproc()
-        img = cv2.imread("ruta.png")
-        img_norm, mask = pre.process(img, float_mask=True)
-        ```
+        Ejecuta el pipeline completo sobre una imagen BGR/Gray.
+
+        Devuelve `PreprocOutput` con:
+        - `img`   : float32 en [0, 1], tamaño `cfg.target_size`.
+        - `mask`  : uint8 {0,255}, alineada con `img`.
+        - `meta`  : detalles geométricos del objeto detectado (o `None`).
         """
-        img = img_bgr
-        if self.cfg.to_gray and img.ndim == 3:
-            img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
-        if self.cfg.blur_ksize and self.cfg.blur_ksize > 1:
-            k = self.cfg.blur_ksize | 1  # aseguramos impar
-            img = cv2.GaussianBlur(img, (k, k), 0)
-
-        mask = self.segment(self._normalize_values(img, self.cfg.normalize_kind))
-        mask = self._asegurar_mask_uint8(mask)
-
-        if self.cfg.crop_to_bbox:
-            img, mask = self._crop_to_mask(img, mask, margin=self.cfg.crop_margin)
-
-        img = self._resize_pad(img, self.cfg.target_size, self.cfg.keep_aspect)
-        mask = self._resize_pad(mask, self.cfg.target_size, self.cfg.keep_aspect, is_mask=True)
-        mask = self._asegurar_mask_uint8(mask)
-
-        img = self._normalize_values(img, self.cfg.normalize_kind)
-        img = img.astype(np.float32, copy=False)
-        imin = float(img.min(initial=0.0))
-        imax = float(img.max(initial=1.0))
-        if imax > 1.0 or imin < 0.0:
-            img = ((img - imin) / (imax - imin + 1e-6)).astype(np.float32, copy=False)
+        if img_bgr.ndim == 3:
+            gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
         else:
-            img = np.clip(img, 0.0, 1.0).astype(np.float32, copy=False)
+            gray = np.asarray(img_bgr, dtype=np.uint8)
 
-        mask = mask.astype(np.uint8, copy=False)
+        gray_norm = self._normalize_illum(gray)
+        mask = self._bin_mask(gray_norm)
 
-        return img, mask
+        min_area = max(1, int(self.cfg.min_area_ratio * mask.size))
+        if cv2.countNonZero(mask) < min_area and not self.cfg.use_adaptive:
+            # Fallback: probar con threshold adaptativo forzado.
+            mask = self._bin_mask(gray_norm, force_adaptive=True)
 
-    # --------- API pública --------- #
-    def normalize(
-        self, 
-        img_bgr: ColorImageU8
-        ) -> GrayImageF32:
-        """
-        ### Normalización geométrica/fotométrica
-        Convierte una imagen BGR/Gray a formato canónico para features.
-        - Convierte a gris si `cfg.to_gray`
-        - Redimensiona y aplica pad según `cfg.target_size` y `cfg.keep_aspect`
-        - Aplica blur gaussiano si `cfg.blur_ksize`
-        - Escala valores según `cfg.normalize_kind`
-        ### Resumen
+        cnts, hier = self._contours_with_holes(mask)
+        best_score = -1.0
+        best_feat: Optional[dict] = None
+        best_contour: Optional[np.ndarray] = None
 
-        ```
-        pre = ImgPreproc()
-        img_norm = pre.normalize(img_bgr)
-        ```
-        """
-        x = img_bgr
+        for idx, contour in enumerate(cnts):
+            hrow = hier[idx] if idx < len(hier) else None
+            feat = self._features(mask.shape, contour, hrow)
+            if feat is None or feat["area"] < min_area:
+                continue
+            score = self._score(feat, mask.shape)
+            if score > best_score:
+                best_score = score
+                best_feat = feat
+                best_contour = contour
 
-        # 1) Se transforma en gris dependiendo de la configuración.
-        # Depende de: self.cfg.to_gray ? true : false
-        if self.cfg.to_gray and x.ndim == 3:
-            # Función de cv2
-            x = cv2.cvtColor(x, cv2.COLOR_BGR2GRAY)
+        if best_feat is None or best_contour is None:
+            resized = self._resize_pad(gray_norm, self.cfg.target_size, self.cfg.keep_aspect)
+            mask_resized = np.zeros(self.cfg.target_size, dtype=np.uint8)
+            img_norm = self._normalize_unit(resized)
+            return PreprocOutput(img=img_norm, mask=mask_resized, meta=None)
 
-        # 2) Redimensionar a tamaño objetivo
-        # En self.cfg.target_size es el tamaño que se debe tener, 128 x 128 default
-        # Si se quiere mantener aspecto según self.cfg.keep_aspect ? true : false
-        x = self._resize_pad(x, self.cfg.target_size, self.cfg.keep_aspect)
+        obj_mask = np.zeros_like(mask, dtype=np.uint8)
+        cv2.drawContours(obj_mask, [best_contour], -1, color=255, thickness=-1)
 
-        # 3) Blur opcional para bajar ruido de alta freq
-        # Depende de (self.cfg.blur_ksize != 0) ? true : false 
-        if self.cfg.blur_ksize and self.cfg.blur_ksize > 1:
-            k = self.cfg.blur_ksize | 1  # aseguramos impar
-            x = cv2.GaussianBlur(x, (k, k), 0)
+        rotate_mode = self.cfg.rotate_crop_mode
+        square_crop = False
+        use_rotation = True
 
-        # 4) Normalización fotométrica
-        x = self._normalize_values(x, self.cfg.normalize_kind)
+        if rotate_mode == "auto":
+            if best_feat["holes"] >= 1 and best_feat["circularity"] > 0.6:
+                square_crop = True
+            elif best_feat["aspect_ratio"] >= 2.0 and best_feat["inertia_ratio"] < 0.25:
+                square_crop = False
+            else:
+                square_crop = True
+        elif rotate_mode == "square":
+            square_crop = True
+        elif rotate_mode == "rect":
+            square_crop = False
+        elif rotate_mode == "none":
+            square_crop = False
+            use_rotation = False
+        else:
+            raise ValueError(f"rotate_crop_mode desconocido: {rotate_mode}")
+
+        if use_rotation:
+            crop_img, crop_mask, M = self._crop_aligned(img_bgr, obj_mask, best_feat["rect"], square_crop)
+        else:
+            crop_img, crop_mask, M = self._crop_axis_aligned(img_bgr, obj_mask, best_feat["rect"], square_crop)
+
+        if crop_img.size == 0 or crop_mask.size == 0:
+            resized = self._resize_pad(gray_norm, self.cfg.target_size, self.cfg.keep_aspect)
+            mask_resized = np.zeros(self.cfg.target_size, dtype=np.uint8)
+            img_norm = self._normalize_unit(resized)
+            return PreprocOutput(img=img_norm, mask=mask_resized, meta=None)
+
+        if crop_img.ndim == 3:
+            crop_gray = cv2.cvtColor(crop_img, cv2.COLOR_BGR2GRAY)
+        else:
+            crop_gray = crop_img
+
+        crop_mask = self._ensure_mask_uint8(crop_mask)
+
+        img_resized = self._resize_pad(crop_gray, self.cfg.target_size, self.cfg.keep_aspect)
+        mask_resized = self._resize_pad(crop_mask, self.cfg.target_size, self.cfg.keep_aspect, is_mask=True)
+        mask_resized = self._ensure_mask_uint8(mask_resized)
+
+        img_norm = self._normalize_unit(img_resized)
+
+        meta = None
+        if self.cfg.return_meta:
+            meta = SegMeta(
+                contour=best_contour.copy(),
+                rect=best_feat["rect"],
+                centroid=best_feat["centroid"],
+                inertia_ratio=float(best_feat["inertia_ratio"]),
+                aspect_ratio=float(best_feat["aspect_ratio"]),
+                circularity=float(best_feat["circularity"]),
+                holes=int(best_feat["holes"]),
+                M_warp=M.astype(np.float32, copy=False),
+            )
+
+        return PreprocOutput(img=img_norm, mask=mask_resized, meta=meta)
+
+    # ------------------------------------------------------------------ #
+    # Helpers privados
+    # ------------------------------------------------------------------ #
+    def _normalize_illum(self, gray: np.ndarray) -> np.ndarray:
+        """Filtra iluminación de baja frecuencia y reescala a [0,255]."""
+
+        bg = cv2.GaussianBlur(gray, (0, 0), sigmaX=self.cfg.illum_sigma, sigmaY=self.cfg.illum_sigma)
+        norm = cv2.addWeighted(gray, 1.0, bg, -1.0, 128.0)
+        return cv2.normalize(norm, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+
+    def _bin_mask(self, gray_norm: np.ndarray, *, force_adaptive: Optional[bool] = None) -> MaskU8:
+        """Genera una máscara binaria robusta a partir de la imagen normalizada."""
+
+        use_adaptive = self.cfg.use_adaptive if force_adaptive is None else force_adaptive
+        g = cv2.GaussianBlur(gray_norm, (5, 5), 0)
+        if use_adaptive:
+            mask = cv2.adaptiveThreshold(
+                255 - g,
+                255,
+                cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY,
+                31,
+                2,
+            )
+        else:
+            _, mask = cv2.threshold(255 - g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        if self.cfg.open_ksize > 1:
+            k_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (self.cfg.open_ksize, self.cfg.open_ksize))
+            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, k_open, iterations=1)
+        if self.cfg.close_ksize > 1:
+            k_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (self.cfg.close_ksize, self.cfg.close_ksize))
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k_close, iterations=1)
+        return mask.astype(np.uint8, copy=False)
+
+    def _contours_with_holes(self, mask: MaskU8) -> tuple[list[np.ndarray], np.ndarray]:
+        """Obtiene contornos junto con su jerarquía RETR_CCOMP."""
+
+        cnts, hier = cv2.findContours(mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+        if hier is not None and len(hier) > 0:
+            hier = hier[0]
+        else:
+            hier = np.zeros((0, 4), dtype=np.int32)
+        return cnts, hier
+
+    def _features(
+        self,
+        shape: Tuple[int, int],
+        contour: np.ndarray,
+        hierarchy_row: Optional[np.ndarray],
+    ) -> Optional[dict]:
+        """Extrae descriptores geométricos simples para un contorno."""
+
+        area = float(cv2.contourArea(contour))
+        if area <= 0.0:
+            return None
+
+        perim = float(cv2.arcLength(contour, True))
+        circularity = float(4.0 * np.pi * area / (perim * perim + 1e-9))
+
+        moments = cv2.moments(contour)
+        cx = float(moments["m10"] / (moments["m00"] + 1e-9))
+        cy = float(moments["m01"] / (moments["m00"] + 1e-9))
+
+        cov_xx = moments["mu20"] / (moments["m00"] + 1e-9)
+        cov_yy = moments["mu02"] / (moments["m00"] + 1e-9)
+        cov_xy = moments["mu11"] / (moments["m00"] + 1e-9)
+        cov = np.array([[cov_xx, cov_xy], [cov_xy, cov_yy]], dtype=np.float64)
+        eigvals, _ = np.linalg.eig(cov + 1e-9 * np.eye(2))
+        lam_min, lam_max = np.sort(eigvals)
+        inertia_ratio = float(lam_min / (lam_max + 1e-9))
+
+        rect = cv2.minAreaRect(contour)
+        (_, _), (w_rect, h_rect), _ = rect
+        aspect_ratio = float(max(w_rect, h_rect) / max(1.0, min(w_rect, h_rect)))
+
+        H, W = shape
+        dist_center = float(np.hypot(cx - W / 2.0, cy - H / 2.0) / np.hypot(W / 2.0, H / 2.0))
+
+        holes = 0
+        if hierarchy_row is not None and len(hierarchy_row) == 4 and int(hierarchy_row[2]) != -1:
+            holes = 1
+
+        return dict(
+            area=area,
+            circularity=circularity,
+            inertia_ratio=inertia_ratio,
+            aspect_ratio=aspect_ratio,
+            centroid=(cx, cy),
+            rect=rect,
+            dist_center=dist_center,
+            holes=holes,
+        )
+
+    def _score(self, features: Optional[dict], shape: Tuple[int, int]) -> float:
+        """Puntúa un contorno en función de su tamaño y centralidad."""
+
+        if features is None:
+            return -1.0
+
+        box = cv2.boxPoints(features["rect"]).astype(int)
+        x, y, w, h = cv2.boundingRect(box)
+        H, W = shape
+        touches = x <= 2 or y <= 2 or (x + w) >= W - 2 or (y + h) >= H - 2
+        centrality = np.exp(-((features["dist_center"] ** 2) / 0.15))
+        penalty = 0.5 if (self.cfg.penalize_border and touches) else 1.0
+        return float(features["area"] * centrality * penalty)
+
+    def _crop_aligned(
+        self,
+        img: np.ndarray,
+        mask: np.ndarray,
+        rect,
+        square: bool,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Recorta alineando la caja mínima rotada del contorno."""
+
+        (cx, cy), (w, h), theta = rect
+        if square:
+            side = max(w, h)
+            w = h = side
+
+        w *= 1.0 + self.cfg.pad_ratio
+        h *= 1.0 + self.cfg.pad_ratio
+
+        M = cv2.getRotationMatrix2D((cx, cy), theta, 1.0)
+        warp_img = cv2.warpAffine(
+            img,
+            M,
+            (img.shape[1], img.shape[0]),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
+        )
+        warp_mask = cv2.warpAffine(
+            mask,
+            M,
+            (mask.shape[1], mask.shape[0]),
+            flags=cv2.INTER_NEAREST,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
+        )
+
+        x0 = max(0, int(round(cx - w / 2.0)))
+        y0 = max(0, int(round(cy - h / 2.0)))
+        x1 = min(img.shape[1], int(round(cx + w / 2.0)))
+        y1 = min(img.shape[0], int(round(cy + h / 2.0)))
+
+        return (
+            warp_img[y0:y1, x0:x1],
+            warp_mask[y0:y1, x0:x1],
+            M.astype(np.float32, copy=False),
+        )
+
+    def _crop_axis_aligned(
+        self,
+        img: np.ndarray,
+        mask: np.ndarray,
+        rect,
+        square: bool,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Recorte axis-aligned sin aplicar rotación explícita."""
+
+        (cx, cy), (w, h), _ = rect
+        if square:
+            side = max(w, h)
+            w = h = side
+
+        w *= 1.0 + self.cfg.pad_ratio
+        h *= 1.0 + self.cfg.pad_ratio
+
+        x0 = max(0, int(round(cx - w / 2.0)))
+        y0 = max(0, int(round(cy - h / 2.0)))
+        x1 = min(img.shape[1], int(round(cx + w / 2.0)))
+        y1 = min(img.shape[0], int(round(cy + h / 2.0)))
+
+        M = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=np.float32)
+        return (
+            img[y0:y1, x0:x1],
+            mask[y0:y1, x0:x1],
+            M,
+        )
+
+    def _resize_pad(
+        self,
+        x: np.ndarray,
+        target: Tuple[int, int],
+        keep_aspect: bool,
+        *,
+        is_mask: bool = False,
+    ) -> np.ndarray:
+        """Redimensiona y aplica padding centrado si se solicita."""
+
+        H, W = target
+        if x.size == 0:
+            return np.zeros((H, W), dtype=x.dtype)
+
+        interpolation = cv2.INTER_NEAREST if is_mask else cv2.INTER_LINEAR
+        if keep_aspect:
+            ih, iw = x.shape[:2]
+            scale = min(H / ih, W / iw)
+            nh = max(1, int(round(ih * scale)))
+            nw = max(1, int(round(iw * scale)))
+            resized = cv2.resize(x, (nw, nh), interpolation=interpolation)
+
+            top = (H - nh) // 2
+            bottom = H - nh - top
+            left = (W - nw) // 2
+            right = W - nw - left
+
+            border_value = 0
+            if not is_mask and x.ndim == 3:
+                border_value = [0, 0, 0]
+
+            resized = cv2.copyMakeBorder(
+                resized,
+                top,
+                bottom,
+                left,
+                right,
+                borderType=cv2.BORDER_CONSTANT,
+                value=border_value,
+            )
+            return resized
+
+        return cv2.resize(x, (W, H), interpolation=interpolation)
+
+    def _ensure_mask_uint8(self, mask: np.ndarray) -> MaskU8:
+        """Convierte cualquier máscara binaria al formato uint8 {0,255}."""
+
+        mask_u8 = np.where(mask > 0, 255, 0).astype(np.uint8, copy=False)
+        return mask_u8
+
+    def _normalize_unit(self, x: np.ndarray) -> np.ndarray:
+        """Escala un arreglo al rango [0,1] en float32."""
 
         x = x.astype(np.float32, copy=False)
         xmin = float(x.min(initial=0.0))
         xmax = float(x.max(initial=1.0))
-        if xmax > 1.0 or xmin < 0.0:
-            x = ((x - xmin) / (xmax - xmin + 1e-6)).astype(np.float32, copy=False)
+        if xmax - xmin > 1e-6:
+            x = (x - xmin) / (xmax - xmin)
         else:
-            x = np.clip(x, 0.0, 1.0).astype(np.float32, copy=False)
+            x.fill(0.0)
         return x
-
-    # -------------------------------------------------------------------------------------------------  #
-
-    def segment(self, img_norm: GrayImageF32) -> MaskU8:
-        """
-        ### Segmentación del objeto
-        Genera máscara binaria del objeto principal a partir de una imagen normalizada.
-        - Umbral Otsu con fallback adaptativo
-        - Ajusta polaridad para dejar fondo oscuro
-        - Opcionalmente aplica apertura/cierre según cfg
-        - Conserva la componente conexa mayor y filtra por área mínima
-        ### Resumen
-
-        ```
-        pre = ImgPreproc()
-        mask = pre.segment(img_norm)
-        ```
-        """
-
-        # Asegurar uint8 de 0..255 para umbralizar
-        x8 = self._as_u8(img_norm)
-
-        # 1) Umbral global (Otsu) con fallback adaptativo si salió trivial
-        _, th = cv2.threshold(x8, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        if th.sum() in (0, 255 * th.size):
-            th = cv2.adaptiveThreshold(
-                x8, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                cv2.THRESH_BINARY, 35, 5
-            )
-
-        # 2) Asegurar polaridad: objeto en blanco (fondo tiende a negro)
-        if self._border_is_white(th):
-            th = cv2.bitwise_not(th)
-
-        # 3) Ver si rellenar los huecos o no.
-        k = self.cfg.open_ksize
-        if k and k > 1:
-            th = cv2.morphologyEx(th, cv2.MORPH_OPEN, np.ones((k, k), np.uint8), 1)
-
-        k = self.cfg.close_ksize
-        if k and k > 1:
-            th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8), 1)
-
-        # 4) Elegir componente conexa principal
-        mask = self._largest_component(th)
-        mask = self._asegurar_mask_uint8(mask)
-
-        # 5) Filtro por área mínima
-        H, W = mask.shape
-        min_area = max(1, int(self.cfg.seg_min_area * H * W))
-
-        if cv2.countNonZero(mask) < min_area:
-            mask[:] = 0
-
-        return mask
-
-    # -------------------------------------------------------------------------------------------------  #
-
-    def meta(self) -> dict:
-        """Pequeña trazabilidad del preproc para auditar runs."""
-        return {
-            'size': self.cfg.target_size,
-            'keep_aspect': self.cfg.keep_aspect,
-            'to_gray': self.cfg.to_gray,
-            'normalize': self.cfg.normalize_kind,
-            'blur_ksize': self.cfg.blur_ksize,
-
-        }
-
-    # -------------------------------------------------------------------------------------------------  #
-    #                               --------- Helpers privados  ---------                                #
-    # -------------------------------------------------------------------------------------------------  #
-    def _resize_pad(
-            self, 
-            x: np.ndarray, 
-            target: Tuple[int, int], 
-            keep_aspect: bool,
-            *,
-            is_mask: bool = False
-            ) -> np.ndarray:
-        """
-        ### Redimensionado con padding
-        Ajusta la imagen al tamaño objetivo manteniendo aspecto si se solicita.
-        - Si `keep_aspect`, hace resize proporcional y completa con bordes negros centrados
-        - Si no, hace resize directo al tamaño target
-        ### Resumen
-
-        ```
-        pre = ImgPreproc()
-        resized = pre._resize_pad(img, (128, 128), keep_aspect=True)
-        ```
-        """
-        
-        H, W = target
-        interpolation = cv2.INTER_NEAREST if is_mask else cv2.INTER_AREA
-        if keep_aspect:
-            ih, iw = x.shape[:2]
-            s = min(H / ih, W / iw)
-            nh, nw = max(1, int(ih * s)), max(1, int(iw * s))
-            x = cv2.resize(x, (nw, nh), interpolation=interpolation)
-            top  = (H - nh) // 2
-            left = (W - nw) // 2
-            bot  = H - nh - top
-            right= W - nw - left
-            padval = 0
-            x = cv2.copyMakeBorder(x, top, bot, left, right, cv2.BORDER_CONSTANT, value=padval)
-            return x
-        else:
-            return cv2.resize(x, (W, H), interpolation=interpolation)
-
-    # -------------------------------------------------------------------------------------------------  #
-
-    def _normalize_values(self, x: np.ndarray, kind: NormKind) -> np.ndarray:
-        """
-        ### Escalado fotométrico
-        Normaliza valores de intensidad según la política elegida.
-        - `none`: deja valores originales
-        - `zero_one`: usa percentiles 1-99 para escalar a [0,1]
-        - `zscore`: centra y escala por desviación estándar
-        ### Resumen
-
-        ```
-        pre = ImgPreproc()
-        x = pre._normalize_values(img, "zero_one")
-        ```
-        """
-        
-        x = x.astype(np.float32)
-        if kind == 'none':
-            return x
-        if kind == 'zero_one':
-            p1, p99 = np.percentile(x, 1), np.percentile(x, 99)
-            if not np.isfinite(p1) or not np.isfinite(p99) or p99 <= p1:
-                p1, p99 = float(x.min()), float(x.max())
-            return np.clip((x - p1) / (p99 - p1 + 1e-6), 0, 1)
-        # zscore
-        mu, sd = x.mean(), x.std()
-        return (x - mu) / (sd + 1e-6)
-
-    # -------------------------------------------------------------------------------------------------  #
-
-    def _as_u8(self, x: np.ndarray) -> np.ndarray:
-        """
-        ### Conversión a uint8
-        Convierte arrays float (0-1 o z-score) a `uint8` [0,255] antes de umbralizar.
-        - Si ya es `uint8`, lo devuelve tal cual
-        - Usa percentiles para z-score u otros rangos
-        ### Resumen
-
-        ```
-        pre = ImgPreproc()
-        x8 = pre._as_u8(img_norm)
-        ```
-        """
-
-        if x.dtype == np.uint8:
-            return x
-        xmax = float(x.max())
-        xmin = float(x.min())
-        
-        if xmax <= 1.5 and xmin >= -0.1:
-            return np.clip(x * 255.0, 0, 255).astype(np.uint8)
-        
-        # zscore u otros rangos: normalizamos robusto
-        p1, p99 = np.percentile(x, 1), np.percentile(x, 99)
-        x = np.clip((x - p1) / (p99 - p1 + 1e-6), 0, 1)
-        return (x * 255.0).astype(np.uint8)
-
-    # -------------------------------------------------------------------------------------------------  #
-
-    def _border_is_white(self, th: np.ndarray) -> bool:
-        """
-        ### Detección de fondo claro
-        Calcula la media del borde de la máscara para decidir si hay que invertirla.
-        - Útil para asegurar objeto en blanco y fondo oscuro
-        ### Resumen
-
-        ```
-        pre = ImgPreproc()
-        invertir = pre._border_is_white(mask)
-        ```
-        """
-
-        
-        border = np.concatenate([th[0, :], th[-1, :], th[:, 0], th[:, -1]])
-        return border.mean() > 127
-
-    # -------------------------------------------------------------------------------------------------  #
-
-    def _largest_component(self, th: np.ndarray) -> MaskU8:
-        """
-        ### Selección de componente principal
-        Mantiene solo el blob más grande tras la segmentación.
-        - Usa `connectedComponentsWithStats` y descarta el resto
-        ### Resumen
-
-        ```
-        pre = ImgPreproc()
-        main_mask = pre._largest_component(mask)
-        ```
-        """
-        
-        num, labels, stats, _ = cv2.connectedComponentsWithStats(th, connectivity=8)
-        
-        if num <= 1:
-            return th
-        
-        areas = stats[1:, cv2.CC_STAT_AREA]
-        idx = 1 + int(np.argmax(areas)) if len(areas) else 0
-        mask = (labels == idx).astype(np.uint8) * 255
-        
-        return mask
-
-    # ------------------------------------------------------------------------------------------------- #
-
-    def _crop_to_mask(
-        self,
-        img: np.ndarray,
-        mask: np.ndarray,
-        *,
-        margin: int = 0
-    ) -> tuple[np.ndarray, np.ndarray]:
-        if cv2.countNonZero(mask) == 0:
-            return img, mask
-        x, y, w, h = cv2.boundingRect(mask)
-        x0 = max(0, x - margin)
-        y0 = max(0, y - margin)
-        x1 = min(img.shape[1], x + w + margin)
-        y1 = min(img.shape[0], y + h + margin)
-        return img[y0:y1, x0:x1], mask[y0:y1, x0:x1]
-
-    # ------------------------------------------------------------------------------------------------- #
-
-    def _asegurar_mask_uint8(self, mask: np.ndarray) -> MaskU8:
-        m = np.asarray(mask)
-        if m.dtype != np.uint8:
-            m = (m > 0).astype(np.uint8)
-        else:
-            if m.max(initial=0) not in (0, 1, 255):
-                m = (m > 0).astype(np.uint8)
-        if m.max(initial=0) <= 1:
-            m = (m > 0).astype(np.uint8) * 255
-        else:
-            m = np.where(m > 0, 255, 0).astype(np.uint8)
-        return m
