@@ -35,3 +35,6 @@ Thumbs.db
 # Logs y temporales
 *.log
 *.tmp
+
+# Carpeta temporal
+/Database/tmp
