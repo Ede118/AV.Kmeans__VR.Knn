@@ -1,6 +1,15 @@
 from Code.types import (
-    VecF, VecI, MatF, ArrayLike, DTYPE, F32,
-    ColorImageU8, GrayImageF32, MaskU8
+    DTYPE,
+    VecF,
+    MatF,
+    ImgColorF,
+    ImgGrayF,
+    Mask,
+    ImgColor,
+    ImgGray,
+    FeatMat,
+    FeatVec,
+    LabelArray
 )
 from .ImgOrchestrator import (
     ImgOrchestrator,

@@ -1,0 +1,8 @@
+images/tornillo/Tornillo003.png
+images/arandela/Arandela006.png
+images/clavo/Clavo004.png
+images/arandela/Arandela010.png
+images/clavo/Clavo003.png
+images/arandela/Arandela002.png
+images/arandela/Arandela003.png
+images/arandela/Arandela012.png

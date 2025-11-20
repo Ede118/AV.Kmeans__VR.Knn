@@ -1,4 +1,0 @@
-[info] bootstrap run initialized
-[info] loading centroids and embeddings
-[info] evaluation completed successfully
-[info] artifacts stored on disk

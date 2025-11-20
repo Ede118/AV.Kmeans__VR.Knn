@@ -1,0 +1,16 @@
+audio/contar/Contar007.wav
+audio/salir/Salir004.wav
+audio/salir/Salir002.wav
+audio/proporcion/Proporcion003.wav
+audio/contar/Contar001.wav
+audio/contar/Contar002.wav
+audio/contar/Contar008.wav
+audio/proporcion/Proporcion001.wav
+audio/salir/Salir001.wav
+audio/salir/Salir005.wav
+audio/proporcion/Proporcion002.wav
+audio/salir/Salir008.wav
+audio/proporcion/Proporcion008.wav
+audio/contar/Contar006.wav
+audio/salir/Salir007.wav
+audio/contar/Contar005.wav

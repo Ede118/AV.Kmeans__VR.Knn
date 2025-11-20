@@ -1,0 +1,5 @@
+audio/proporcion/Proporcion007.wav
+audio/salir/Salir003.wav
+audio/proporcion/Proporcion005.wav
+audio/proporcion/Proporcion006.wav
+audio/salir/Salir006.wav

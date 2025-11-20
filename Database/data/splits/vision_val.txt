@@ -1,0 +1,7 @@
+images/tornillo/Tornillo004.png
+images/clavo/Clavo007.png
+images/tuerca/Tuerca006.png
+images/tuerca/Tuerca003.png
+images/tuerca/Tuerca001.png
+images/arandela/Arandela009.png
+images/tornillo/Tornillo008.png
