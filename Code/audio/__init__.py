@@ -1,29 +1,25 @@
-from Code.types import VecF, VecI, MatF, F32, I32, I8, DTYPE
-from .AudioFeat import AudioFeat
-from .AudioPreproc import AudioPreproc, PreprocCfg as AudioPreprocCfg
-from .Standardizer import Standardizer
-from .KnnModel import KnnModel
-from .AudioOrchestrator import (
-    AudioOrchestrator,
-    build_reference_from_paths,
-    load_reference_from_repo,
-    save_reference_to_repo,
-    identify_path,
-    identify_batch,
+from Code.types import (
+    VecF,
+    VecI,
+    MatF,
+    F32,
+    I32,
+    I8,
+    DTYPE,
+    AudioSignal,
+    Spectrogram,
+    FeatVec,
+    FeatMat,
+    LabelArray,
 )
+from .AudioFeat import AudioFeat, AudioFeatConfig
+from .AudioPreproc import AudioPreproc, PreprocCfg
 
 __all__ = [
-    "AudioFeat",
     "AudioPreproc",
     "AudioPreprocCfg",
-    "Standardizer",
-    "KnnModel",
-    "AudioOrchestrator",
-    "build_reference_from_paths",
-    "load_reference_from_repo",
-    "save_reference_to_repo",
-    "identify_path",
-    "identify_batch",
+    "AudioFeat",
+    "AudioFeatConfig",
     "VecF",
     "VecI",
     "MatF",
@@ -31,4 +27,9 @@ __all__ = [
     "I32",
     "I8",
     "DTYPE",
+    "AudioSignal",
+    "Spectrogram",
+    "FeatVec",
+    "FeatMat",
+    "LabelArray",
 ]

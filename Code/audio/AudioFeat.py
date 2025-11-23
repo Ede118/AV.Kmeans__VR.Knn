@@ -284,6 +284,7 @@ class AudioFeat:
     ```
     """
     n = int(self.cfg.n_mfcc)
+    
 
     if librosa is not None:
         M = _mfcc_librosa(y, sr, win, hop, n)   # (n, T) sin c0
@@ -300,7 +301,9 @@ class AudioFeat:
             d2 = _delta_feat(d1, width=9, order=1)  # Δ sobre Δ
             feats.append(d2)
 
-    return np.concatenate(feats, axis=0).astype(np.float32)  # (C, T)
+    print([f.shape for f in feats])
+
+    return np.concatenate(feats, axis=1).astype(np.float32)  # (C, T)
 
   # -------------------------------------------------------------------------------------------------  #
 
@@ -319,7 +322,7 @@ class AudioFeat:
     ```
     """
     
-    win, hop = self.pre.framing_params()
+    win, hop = self.pre.parametros_de_framing()
 
     # 1) MFCC (sin c0) + delta/delta2 opcional
     MF = self._extract_mfcc(y, sr, win, hop)  # (Cmf, T)

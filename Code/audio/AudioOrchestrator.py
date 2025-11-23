@@ -227,9 +227,9 @@ class AudioOrchestrator:
             audio_proc, sr = self.preproc.process_path(entrada)
         elif isinstance(entrada, tuple) and len(entrada) == 2:
             y, sr = entrada
-            audio_proc, sr = self.preproc.preprocess(np.asarray(y, dtype=np.float32), int(sr))
+            audio_proc, sr = self.preproc.preprocesar(np.asarray(y, dtype=np.float32), int(sr))
         elif isinstance(entrada, np.ndarray):
-            audio_proc, sr = self.preproc.preprocess(np.asarray(entrada, dtype=np.float32), self.preproc.cfg.target_sr)
+            audio_proc, sr = self.preproc.preprocesar(np.asarray(entrada, dtype=np.float32), self.preproc.cfg.target_sr)
         else:
             raise TypeError("Entrada inválida para _preparar_vector.")
 

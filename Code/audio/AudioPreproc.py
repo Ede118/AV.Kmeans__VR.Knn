@@ -5,12 +5,14 @@ from typing import Sequence, Tuple, List, Optional
 import numpy as np
 import scipy.signal as sps
 from scipy.io import wavfile
-from Code.types import VecF, MatF, I64, F64, F32
+
+from Code.types import VecF, MatF, I64, F64, F32, AudioSignal, Spectrogram
 
 
-    # -------------------------------------------------------------------------------------------------  #
-    #                                    --------- Config  ---------                                     #
-    # -------------------------------------------------------------------------------------------------  #
+
+# -------------------------------------------------------------------------------------------------  #
+#                                    --------- Config  ---------                                     #
+# -------------------------------------------------------------------------------------------------  #
 
 @dataclass(frozen=True)
 class PreprocCfg:
@@ -46,9 +48,9 @@ class PreprocCfg:
     pad_mode: str = "edge"           # "edge" | "constant" | "reflect"
 
 
-    # -------------------------------------------------------------------------------------------------  #
-    #                                    --------- Clase  ---------                                      #
-    # -------------------------------------------------------------------------------------------------  #
+# -------------------------------------------------------------------------------------------------  #
+#                                    --------- Clase  ---------                                      #
+# -------------------------------------------------------------------------------------------------  #
 
 class AudioPreproc:
     def __init__(self, cfg: PreprocCfg = PreprocCfg()):
@@ -58,11 +60,11 @@ class AudioPreproc:
     #                           ---------- API pública ----------                                        #
     # -------------------------------------------------------------------------------------------------  #
     
-    def preprocess(
+    def preprocesar(
             self, 
-            y: VecF, 
+            y: AudioSignal, 
             sr: int
-        ) -> Tuple[VecF, int]:
+        ) -> Tuple[AudioSignal, int]:
         """
         ### Preprocesamiento completo
         Resamplea, filtra, realza, aplica VAD, normaliza y ajusta la duración.
@@ -86,7 +88,7 @@ class AudioPreproc:
         y = self._highpass(y, sr, self.cfg.highpass_hz, self.cfg.hp_order)
 
         # 3) Pre-énfasis (realce de altas; NO compensa graves recortados)
-        y = self._pre_emphasis(y, self.cfg.preemph_a)
+        y = self._pre_enfasis(y, self.cfg.preemph_a)
 
         # 4) VAD simple: recorta silencios y expande bordes
         y = self._simple_vad(
@@ -98,7 +100,7 @@ class AudioPreproc:
         )
 
         # 5) Normalización de nivel (RMS o pico) con guardarraíles
-        y = self._normalize(
+        y = self._normalizar(
             y,
             mode=self.cfg.norm_mode,
             rms_target_dbfs=self.cfg.rms_target_dbfs,
@@ -108,11 +110,11 @@ class AudioPreproc:
         )
 
         # 6) Duración fija T_fija con padding elegido
-        y = self._fix_duration(y, sr, self.cfg.t_sec, pad_mode=self.cfg.pad_mode, center_crop=False)
+        y = self._arreglar_duracion(y, sr, self.cfg.t_sec, pad_mode=self.cfg.pad_mode, center_crop=False)
 
         return y.astype(F32, copy=False), sr
 
-    def process_path(self, path: str | Path) -> Tuple[VecF, int]:
+    def preprocesar_desde_path(self, path: str | Path) -> Tuple[VecF, int]:
         """
         ### Preprocesar desde disco
         Lee un WAV y ejecuta el pipeline de preprocesamiento.
@@ -122,11 +124,11 @@ class AudioPreproc:
         audio_proc, sr_out = preproc.process_path("voz.wav")
         ```
         """
-        sr, y = self._load_wav(path)
-        y_proc, sr_proc = self.preprocess(y, sr)
+        sr, y = self._cargar_wav(path)
+        y_proc, sr_proc = self.preprocesar(y, sr)
         return y_proc, sr_proc
 
-    def framing_params(self) -> Tuple[int, int]:
+    def parametros_de_framing(self) -> Tuple[int, int]:
         """
         ### Ventana y hop
         Convierte `frame_ms` y `hop_ms` a muestras según `cfg.target_sr`.
@@ -196,7 +198,7 @@ class AudioPreproc:
     # -------------------------------------------------------------------------------------------------  #
 
     @staticmethod
-    def _pre_emphasis(
+    def _pre_enfasis(
         y: VecF, 
         a: float = 0.97
         ) -> VecF:
@@ -299,7 +301,7 @@ class AudioPreproc:
     # -------------------------------------------------------------------------------------------------  #
 
     @staticmethod
-    def _normalize(
+    def _normalizar(
         y: VecF,
         mode: str = "rms",
         peak_ref: float = 0.98,
@@ -344,7 +346,7 @@ class AudioPreproc:
     # -------------------------------------------------------------------------------------------------  #
 
     @staticmethod
-    def _fix_duration(
+    def _arreglar_duracion(
         y: VecF,
         sr: int,
         t_sec: float,
@@ -390,7 +392,7 @@ class AudioPreproc:
     # -------------------------------------------------------------------------------------------------  #
 
     @staticmethod
-    def _load_wav(path: str | Path) -> Tuple[int, VecF]:
+    def _cargar_wav(path: str | Path) -> Tuple[int, VecF]:
         """Read a WAV file as float32 mono in [-1, 1]."""
         path_obj = Path(path)
         if not path_obj.is_file():
@@ -398,11 +400,11 @@ class AudioPreproc:
         sr, data = wavfile.read(path_obj)
         if data.ndim > 1:
             data = data.mean(axis=1)
-        data = AudioPreproc._to_float32(data)
+        data = AudioPreproc._2float32(data)
         return sr, data
 
     @staticmethod
-    def _to_float32(y: np.ndarray) -> VecF:
+    def _2float32(y: np.ndarray) -> VecF:
         """Convert integer or float arrays to float32 in [-1, 1]."""
         arr = np.asarray(y)
         if not np.issubdtype(arr.dtype, np.floating):

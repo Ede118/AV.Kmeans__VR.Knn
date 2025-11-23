@@ -15,6 +15,8 @@ asegurarse de no importar esos módulos aquí.
 ScalarF: TypeAlias = np.float32
 VecF: TypeAlias = npt.NDArray[np.float32]    # (N,)
 MatF: TypeAlias = npt.NDArray[np.float32]    # (M, N)
+VecI: TypeAlias = npt.NDArray[np.int64]      # (N,)
+ArrayLike: TypeAlias = npt.ArrayLike
 
 # Alias para Vision Artificial
 ImgGray:   TypeAlias = npt.NDArray[np.uint8]     # (H, W), 0–255
@@ -36,6 +38,13 @@ ProbMat:     TypeAlias = MatF      # p(x | c_i) o similar
 LogProbVec:  TypeAlias = VecF
 LogProbMat:  TypeAlias = MatF
 ClassIdx:    TypeAlias = int       # índice de clase (0..C-1)
+
+# Dtypes (compatibilidad con módulos previos)
+F32: TypeAlias = np.float32
+F64: TypeAlias = np.float64
+I64: TypeAlias = np.int64
+I32: TypeAlias = np.int32
+I8: TypeAlias = np.int8
 
 
 # Dtype numérico del proyecto (punto único de verdad)
