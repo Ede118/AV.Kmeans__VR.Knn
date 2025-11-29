@@ -13,13 +13,20 @@ from Code.types import (
     LabelArray,
 )
 from .AudioFeat import AudioFeat, AudioFeatConfig
-from .AudioPreproc import AudioPreproc, PreprocCfg
+from .AudioPreproc import AudioPreproc, AudioPreprocConfig
+from .Standardizer import Standardizer
+from .KnnModel import KnnModel, KnnConfig
+from .AudioOrchestrator import AudioOrchestrator
 
 __all__ = [
     "AudioPreproc",
-    "AudioPreprocCfg",
+    "AudioPreprocConfig",
     "AudioFeat",
     "AudioFeatConfig",
+    "Standardizer",
+    "KnnModel",
+    "KnnConfig",
+    "AudioOrchestrator",
     "VecF",
     "VecI",
     "MatF",

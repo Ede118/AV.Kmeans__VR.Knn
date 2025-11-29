@@ -15,9 +15,9 @@ from Code.types import VecF, MatF, I64, F64, F32, AudioSignal, Spectrogram
 # -------------------------------------------------------------------------------------------------  #
 
 @dataclass(frozen=True)
-class PreprocCfg:
+class AudioPreprocConfig:
     # Normalización de sampling y duración
-    target_sr: int = 16_000          # f_ss [Hz]
+    target_sr: int = 16000          # f_ss [Hz]
     t_sec: float = 1.2               # T_fija [s]
 
     # Ventaneo (para VAD y, luego, AudioFeat)
@@ -53,7 +53,7 @@ class PreprocCfg:
 # -------------------------------------------------------------------------------------------------  #
 
 class AudioPreproc:
-    def __init__(self, cfg: PreprocCfg = PreprocCfg()):
+    def __init__(self, cfg: AudioPreprocConfig = AudioPreprocConfig()):
         self.cfg = cfg
 
     # -------------------------------------------------------------------------------------------------  #
@@ -121,7 +121,7 @@ class AudioPreproc:
         - Retorna audio procesado y sample rate objetivo
         ### Resumen
         ```
-        audio_proc, sr_out = preproc.process_path("voz.wav")
+        audio_proc, sr_out = preproc.preprocesar_desde_path("voz.wav")
         ```
         """
         sr, y = self._cargar_wav(path)

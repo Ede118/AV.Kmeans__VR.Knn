@@ -30,7 +30,7 @@ class KnnModel:
   #                              --------- Módulos Públicos  ---------                                 #
   # -------------------------------------------------------------------------------------------------  #
 
-  def upload_batch(
+  def cargar_lote(
     self,
     matParametros: np.ndarray,   # (N, D) YA estandarizado
     vecLabel: Sequence[str]      # len N
@@ -76,7 +76,7 @@ class KnnModel:
 
     return N
 
-  def predict(
+  def predecir(
         self, 
         x: np.ndarray, 
         exclude_idx: int | None = None
@@ -91,7 +91,7 @@ class KnnModel:
     ```
     """
     if self.X is None or self.y_idx is None or self.labels is None:
-        raise RuntimeError("Modelo no inicializado. Llama upload_batch() primero.")
+        raise RuntimeError("Modelo no inicializado. Llama cargar_lote() primero.")
 
     x = np.asarray(x, dtype=F32).reshape(-1)
     D = self.X.shape[1]
@@ -99,22 +99,42 @@ class KnnModel:
         raise ValueError(f"Dimensión de x inválida. Esperado (D,) con D={D}.")
 
     # distancias a todo el train
-    d = self._distances(x)   # (N,)
+    d = self._distancia(x)   # (N,)
 
     # LOO opcional: no te elijas a vos mismo
     if exclude_idx is not None and 0 <= exclude_idx < d.size:
         d = d.copy()
         d[exclude_idx] = np.inf
 
-    y_hat_idx = self._vote(d)
+    y_hat_idx = self._votacion(d)
     return self.labels[y_hat_idx]
+
+  def distancias(
+        self,
+        x: np.ndarray,
+        exclude_idx: int | None = None
+      ) -> np.ndarray:
+    """
+    ### Distancias k-NN
+    Devuelve las distancias del vector estandarizado a toda la base.
+    - `exclude_idx` permite omitir un índice (útil para LOO)
+    ### Resumen
+    ```
+    d = knn.distancias(x_std)
+    ```
+    """
+    d = self._distancia(x)
+    if exclude_idx is not None and 0 <= exclude_idx < d.size:
+        d = d.copy()
+        d[exclude_idx] = np.inf
+    return d
 
 
   # -------------------------------------------------------------------------------------------------  #
   #                              --------- Módulos Privados  ---------                                 #
   # -------------------------------------------------------------------------------------------------  #
 
-  def _distances(
+  def _distancia(
       self,
       vecAudio: VecF,
   ) -> VecF:
@@ -124,7 +144,7 @@ class KnnModel:
     - Devuelve `np.ndarray` de tamaño `N`
     ### Resumen
     ```
-    distancias = knn._distances(x_std)
+    distancias = knn.distancias(x_std)
     ```
     """
     matDB = self.X
@@ -132,33 +152,24 @@ class KnnModel:
 
     if vecAudio.shape[0] != matDB.shape[1]:
       raise ValueError("x debe tener dimensión (D,)")
+
+    # Forzamos siempre métrica coseno
+    vec_norm = F32(np.linalg.vector_norm(vecAudio))
+
+    if vec_norm < self.cfg.eps:
+      raise ValueError("Es probablemente silencio.")
     
-    if self.cfg.metric == "euclidean":
-      diff = matDB - vecAudio[None, :]
-      vecDistancias = np.sqrt(np.sum(diff*diff, axis=1))
+    norms = self._row_norms
+    if norms is None:
+      norms = np.linalg.norm(matDB, axis=1)
+      norms = np.where(norms < self.cfg.eps, 1.0, norms)
 
-      return vecDistancias.astype(F32)
+    dots = matDB @ vecAudio
+    vecDistancias = 1.0 - dots / (norms * vec_norm + self.cfg.eps)
 
-    elif self.cfg.metric == "coseno":
-      vec_norm = F32(np.linalg.vector_norm(vecAudio))
-
-      if vec_norm < self.cfg.eps:
-        raise ValueError("Es probablemente silencio.")
-      
-      norms = self._row_norms
-      if norms is None:
-        norms = np.linalg.norm(matDB, axis=1)
-        norms = np.where(norms < self.cfg.eps, 1.0, norms)
-
-      dots = matDB @ vecAudio
-      vecDistancias = 1.0 - dots / (norms * vec_norm + self.cfg.eps)
-
-      return np.clip(vecDistancias, 0.0, 2.0).astype(F32)
-    
-    else:
-      raise TypeError("Solo se tienen cáculo de distancias euclidianas o de cosenos.")
+    return np.clip(vecDistancias, 0.0, 2.0).astype(F32)
   
-  def _vote(
+  def _votacion(
         self, 
         d: np.ndarray
       ) -> int:
@@ -212,53 +223,3 @@ class KnnModel:
             best_d = d_min_c
             best_c = int(c)
     return best_c
-
-  # -------------------------------------------------------------------------------------------------  #
-  #                                  --------- Alias públicos ---------                               #
-  # -------------------------------------------------------------------------------------------------  #
-
-  def cargar_referencias(
-      self,
-      matParametros: np.ndarray,
-      vecLabel: Sequence[str]
-  ) -> int:
-    """
-    ### Alias en español
-    Delegación a `upload_batch`.
-    ### Resumen
-    ```
-    knn.cargar_referencias(X_std, etiquetas)
-    ```
-    """
-    return self.upload_batch(matParametros, vecLabel)
-
-  def predecir(
-      self,
-      x: np.ndarray,
-      exclude_idx: int | None = None
-  ) -> str:
-    """
-    ### Alias en español
-    Delegación a `predict`.
-    ### Resumen
-    ```
-    etiqueta = knn.predecir(x_std)
-    ```
-    """
-    return self.predict(x, exclude_idx=exclude_idx)
-
-  def distancias(
-      self,
-      vecAudio: VecF,
-  ) -> VecF:
-    """
-    ### Alias en español
-    Delegación a `_distances`.
-    ### Resumen
-    ```
-    dist = knn.distancias(x_std)
-    ```
-    """
-    if self.X is None or self.y_idx is None or self.labels is None:
-      raise RuntimeError("Modelo no inicializado. Llama upload_batch() primero.")
-    return self._distances(vecAudio)

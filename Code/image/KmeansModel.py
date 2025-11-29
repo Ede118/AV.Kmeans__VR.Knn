@@ -1,11 +1,3 @@
-"""
-CHANGELOG (2025-01-07): ImgFeat/KMeansModel – Adaptación a PreprocOutput
-- Sustituye el KMeans manual por un wrapper con StandardScaler y sklearn.KMeans, guardando feature_names y dimensión.
-- Añade soporte para vectores 5D/7D, validaciones de forma y utilitarios predict_one, fit_predict y get_centers().
-- Mantiene compatibilidad exponiendo la clase legacy KMeans con DeprecationWarning y reenrutando a la nueva API.
-- Ejemplo: model = KMeansModel(n_clusters=4).fit(X, names); labels = model.predict(X); centers, named = model.get_centers()
-"""
-
 from __future__ import annotations
 
 import warnings

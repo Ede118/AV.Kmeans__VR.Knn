@@ -22,7 +22,71 @@ class SegMeta:
     holes: int
     M_warp: np.ndarray
 
+@dataclass
+class BackgroundModel:
+    """Modelo de fondo: estadísticos globales en HSV."""
+    stats_path: Path                    
+    bg_dir: Path                        
+    stats: dict = field(default_factory=dict) 
 
+    def compute_stats(self) -> None:
+        """Calcula estadísticos globales H y V a partir de todas las imágenes de bg_dir."""
+        paths = sorted(self.bg_dir.rglob("*.jpg"))
+        if not paths:
+            raise ValueError(f"No se encontraron imágenes de background en {self.bg_dir}")
+
+        H_all = []
+        V_all = []
+
+        for p in paths:
+            img = cv.imread(str(p))
+            if img is None:
+                continue
+            hsv = cv.cvtColor(img, cv.COLOR_BGR2HSV)
+            H = hsv[:, :, 0].astype(np.float32)
+            V = hsv[:, :, 2].astype(np.float32)
+
+            H_all.append(H.ravel())
+            V_all.append(V.ravel())
+
+        if not H_all:
+            raise ValueError("No se pudo cargar ninguna imagen de background válida.")
+
+        H_all = np.concatenate(H_all)
+        V_all = np.concatenate(V_all)
+
+        # Rango típico de H (evitando outliers)
+        H_min = np.percentile(H_all, 5)
+        H_max = np.percentile(H_all, 95)
+
+        # Saturación mínima útil (por si querés luego filtrar lavados)
+        # S_all = ... si lo necesitás más adelante
+
+        V_mean = float(np.mean(V_all))
+        V_std = float(np.std(V_all))
+
+        self.stats = {
+            "H_min": H_min,
+            "H_max": H_max,
+            "V_mean": V_mean,
+            "V_std": V_std,
+        }
+
+    def save(self) -> None:
+        """Guarda estadísticos en un .npz comprimido."""
+        self.stats_path.parent.mkdir(parents=True, exist_ok=True)
+        if not self.stats:
+            raise ValueError("No hay estadísticos calculados para guardar.")
+        np.savez_compressed(self.stats_path, **self.stats)
+
+    def load(self) -> None:
+        """Carga estadísticos desde un .npz."""
+        data = np.load(self.stats_path, allow_pickle=False)
+        self.stats = {k: data[k].item() if data[k].shape == () else data[k] for k in data.files}
+
+        
+
+        
 @dataclass(slots=True)
 class PreprocOutput:
     """Salida canónica del preprocesamiento de imágenes."""
@@ -63,7 +127,25 @@ class ImgPreproc:
     - Devuelve imagen y máscara ya redimensionadas a `target_size`.
     """
 
+    bg_dir: Path
+    bg_stats_path: Path
+    bg_model: BackgroundModel = field(init=False)
+
     cfg: ImgPreprocCfg = field(default_factory=ImgPreprocCfg)
+    
+    def __post_init__(self) -> None:
+        self.bg_model = BackgroundModel(
+            stats_path=self.bg_stats_path,
+            bg_dir=self.bg_dir,
+        )
+
+        if self.bg_stats_path.exists():
+            # Cargamos modelo ya calculado
+            self.bg_model.load()
+        else:
+            # Calculamos una sola vez y guardamos
+            self.bg_model.compute_stats()
+            self.bg_model.save()
 
     # ------------------------------------------------------------------ #
     # API pública
@@ -101,26 +183,57 @@ class ImgPreproc:
     def _normalize(
         self,
         img: ImgColorF,
-        sgmX: float = 3.0
         ) -> Mask:
-        """Filtra iluminación de baja frecuencia y reescala a [0,255]."""
+        """
+        Segmenta el objeto usando:
+        - color de fondo (rango típico de H),
+        - diferencia de brillo respecto al modelo de fondo (V_mean, V_std),
+        y luego se queda con las componentes centrales más grandes.
+        """
+        if not self.bg_model.stats:
+            raise RuntimeError("BackgroundModel no tiene estadísticas cargadas.")
+
+        H_min = self.bg_model.stats["H_min"]
+        H_max = self.bg_model.stats["H_max"]
+        V_mean = self.bg_model.stats["V_mean"]
+        V_std = self.bg_model.stats["V_std"]
+
         hsv = cv.cvtColor(img, cv.COLOR_BGR2HSV)
-        blurred = cv.GaussianBlur(hsv, (0, 0), sigmaX=sgmX) # ¿Es necesario...?
+        hsv_blur = cv.GaussianBlur(hsv, (0, 0), sigmaX=self.cfg.sigma)
 
-        lower_green = np.array([35, 40, 40], dtype=np.uint8)
-        upper_green = np.array([85, 255, 255], dtype=np.uint8)
+        H = hsv_blur[:, :, 0].astype(np.float32)
+        S = hsv_blur[:, :, 1].astype(np.float32)
+        V = hsv_blur[:, :, 2].astype(np.float32)
 
-        mask_bg = cv.inRange(blurred, lower_green, upper_green)
+        dh = 5.0
+        lower_H = max(0.0, H_min - dh)
+        upper_H = min(179.0, H_max + dh)
+
+        S_min = 30.0
+
+        # Máscara de fondo por color: H en rango y S suficientemente alta
+        mask_bg_color = np.zeros_like(V, dtype=np.uint8)
+        mask_bg_color[
+            (H >= lower_H) & (H <= upper_H) & (S >= S_min)
+        ] = 255
+
+        if V_std < 1e-3:
+            V_std = 1.0  # evitar división por algo ridículo
+
+        k = 2.0  # cuántas desviaciones permitimos
+        diff_V = np.abs(V - V_mean)
+        mask_bg_brightness = np.zeros_like(V, dtype=np.uint8)
+        mask_bg_brightness[diff_V <= k * V_std] = 255
+
+
+        mask_bg = cv.bitwise_and(mask_bg_color, mask_bg_brightness)
+
         mask_obj = cv.bitwise_not(mask_bg)
 
-        # Componente más grande
-        num_labels, labels = cv.connectedComponents(mask_obj)
-        if num_labels > 1:
-            areas = np.bincount(labels.ravel())[1:]
-            main_label = 1 + np.argmax(areas)
-            mask_obj = np.uint8(labels == main_label) * 255
-        
+        # mask_obj = self._keep_center_components(mask_obj)
+
         return mask_obj
+
 
     def _bbox_from_mask(
         self,
@@ -203,7 +316,7 @@ class ImgPreproc:
         close_ksize: int = 3
         ) -> Mask:
         
-        if open_ksize // 2 != 0 and close_ksize // 2 != 0:
+        if open_ksize // 2 == 0 and close_ksize // 2 == 0:
             raise ValueError("El kernel debe tener tamaño impar.")
 
         kernel_open = np.ones((open_ksize, open_ksize), np.uint8)
