@@ -21,69 +21,6 @@ class SegMeta:
     circularity: float
     holes: int
     M_warp: np.ndarray
-
-@dataclass
-class BackgroundModel:
-    """Modelo de fondo: estadísticos globales en HSV."""
-    stats_path: Path                    
-    bg_dir: Path                        
-    stats: dict = field(default_factory=dict) 
-
-    def compute_stats(self) -> None:
-        """Calcula estadísticos globales H y V a partir de todas las imágenes de bg_dir."""
-        paths = sorted(self.bg_dir.rglob("*.jpg"))
-        if not paths:
-            raise ValueError(f"No se encontraron imágenes de background en {self.bg_dir}")
-
-        H_all = []
-        V_all = []
-
-        for p in paths:
-            img = cv.imread(str(p))
-            if img is None:
-                continue
-            hsv = cv.cvtColor(img, cv.COLOR_BGR2HSV)
-            H = hsv[:, :, 0].astype(np.float32)
-            V = hsv[:, :, 2].astype(np.float32)
-
-            H_all.append(H.ravel())
-            V_all.append(V.ravel())
-
-        if not H_all:
-            raise ValueError("No se pudo cargar ninguna imagen de background válida.")
-
-        H_all = np.concatenate(H_all)
-        V_all = np.concatenate(V_all)
-
-        # Rango típico de H (evitando outliers)
-        H_min = np.percentile(H_all, 5)
-        H_max = np.percentile(H_all, 95)
-
-        # Saturación mínima útil (por si querés luego filtrar lavados)
-        # S_all = ... si lo necesitás más adelante
-
-        V_mean = float(np.mean(V_all))
-        V_std = float(np.std(V_all))
-
-        self.stats = {
-            "H_min": H_min,
-            "H_max": H_max,
-            "V_mean": V_mean,
-            "V_std": V_std,
-        }
-
-    def save(self) -> None:
-        """Guarda estadísticos en un .npz comprimido."""
-        self.stats_path.parent.mkdir(parents=True, exist_ok=True)
-        if not self.stats:
-            raise ValueError("No hay estadísticos calculados para guardar.")
-        np.savez_compressed(self.stats_path, **self.stats)
-
-    def load(self) -> None:
-        """Carga estadísticos desde un .npz."""
-        data = np.load(self.stats_path, allow_pickle=False)
-        self.stats = {k: data[k].item() if data[k].shape == () else data[k] for k in data.files}
-
         
 
         
@@ -127,25 +64,7 @@ class ImgPreproc:
     - Devuelve imagen y máscara ya redimensionadas a `target_size`.
     """
 
-    bg_dir: Path
-    bg_stats_path: Path
-    bg_model: BackgroundModel = field(init=False)
-
     cfg: ImgPreprocCfg = field(default_factory=ImgPreprocCfg)
-    
-    def __post_init__(self) -> None:
-        self.bg_model = BackgroundModel(
-            stats_path=self.bg_stats_path,
-            bg_dir=self.bg_dir,
-        )
-
-        if self.bg_stats_path.exists():
-            # Cargamos modelo ya calculado
-            self.bg_model.load()
-        else:
-            # Calculamos una sola vez y guardamos
-            self.bg_model.compute_stats()
-            self.bg_model.save()
 
     # ------------------------------------------------------------------ #
     # API pública
@@ -154,7 +73,7 @@ class ImgPreproc:
         self, 
         img_color: ImgColorF,
         blacknwhite: bool = False
-        ) -> PreprocOutput:
+        ) -> "ImgPreproc":
         """
         Ejecuta el pipeline completo sobre una imagen BGR/Gray.
 
@@ -165,17 +84,17 @@ class ImgPreproc:
         """
 
         mask_obj = self._normalize(img_color)
+        
         img_sq, mask_sq = self._crop_and_square(img_color, mask_obj, size=self.cfg.target_size)
         
         if self.cfg.flag_refine_mask:
             mask_sq = self._refine_mask(mask_sq, open_ksize=self.cfg.open_ksize, close_ksize=self.cfg.close_ksize)
 
         if blacknwhite:
-            # Pasar a gris float32 normalizado
             img_sq = cv.cvtColor(img_sq, cv.COLOR_BGR2GRAY).astype(np.float32) / 255.0
 
 
-        return PreprocOutput(img=img_sq, mask=mask_sq)
+        return img_sq, mask_sq
 
     # ------------------------------------------------------------------ #
     # Helpers privados
@@ -190,49 +109,19 @@ class ImgPreproc:
         - diferencia de brillo respecto al modelo de fondo (V_mean, V_std),
         y luego se queda con las componentes centrales más grandes.
         """
-        if not self.bg_model.stats:
-            raise RuntimeError("BackgroundModel no tiene estadísticas cargadas.")
 
-        H_min = self.bg_model.stats["H_min"]
-        H_max = self.bg_model.stats["H_max"]
-        V_mean = self.bg_model.stats["V_mean"]
-        V_std = self.bg_model.stats["V_std"]
+        gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+        gray_blur = cv.GaussianBlur(src=gray, ksize=(0, 0), sigmaX=self.cfg.sigma)
 
-        hsv = cv.cvtColor(img, cv.COLOR_BGR2HSV)
-        hsv_blur = cv.GaussianBlur(hsv, (0, 0), sigmaX=self.cfg.sigma)
+        # Aplicar Otsu
+        _, mask = cv.threshold(
+            gray_blur,
+            0,
+            255,
+            cv.THRESH_BINARY_INV + cv.THRESH_OTSU
+        )
 
-        H = hsv_blur[:, :, 0].astype(np.float32)
-        S = hsv_blur[:, :, 1].astype(np.float32)
-        V = hsv_blur[:, :, 2].astype(np.float32)
-
-        dh = 5.0
-        lower_H = max(0.0, H_min - dh)
-        upper_H = min(179.0, H_max + dh)
-
-        S_min = 30.0
-
-        # Máscara de fondo por color: H en rango y S suficientemente alta
-        mask_bg_color = np.zeros_like(V, dtype=np.uint8)
-        mask_bg_color[
-            (H >= lower_H) & (H <= upper_H) & (S >= S_min)
-        ] = 255
-
-        if V_std < 1e-3:
-            V_std = 1.0  # evitar división por algo ridículo
-
-        k = 2.0  # cuántas desviaciones permitimos
-        diff_V = np.abs(V - V_mean)
-        mask_bg_brightness = np.zeros_like(V, dtype=np.uint8)
-        mask_bg_brightness[diff_V <= k * V_std] = 255
-
-
-        mask_bg = cv.bitwise_and(mask_bg_color, mask_bg_brightness)
-
-        mask_obj = cv.bitwise_not(mask_bg)
-
-        # mask_obj = self._keep_center_components(mask_obj)
-
-        return mask_obj
+        return mask
 
 
     def _bbox_from_mask(
@@ -316,7 +205,7 @@ class ImgPreproc:
         close_ksize: int = 3
         ) -> Mask:
         
-        if open_ksize // 2 == 0 and close_ksize // 2 == 0:
+        if open_ksize % 2 != 1 and close_ksize % 2 != 1:
             raise ValueError("El kernel debe tener tamaño impar.")
 
         kernel_open = np.ones((open_ksize, open_ksize), np.uint8)

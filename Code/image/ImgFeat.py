@@ -1,12 +1,5 @@
-"""
-CHANGELOG (2025-01-07): ImgFeat/KMeansModel – Adaptación a PreprocOutput
-- Reescribe ImgFeat para usar la salida de ImgPreproc (img, mask, meta) y generar vectores 5D/7D estables.
-- Incorpora métricas hole_area_ratio, solidity e inertia_ratio, además de perimeter_ratio e inner_gradient en modo 7D.
-- Mantiene compatibilidad saneando la máscara, aceptando meta opcional y devolviendo nombres/debug alineados con el vector.
-- Ejemplo: pre_out = ImgPreproc().process(img); vec, names, dbg = ImgFeat("7D").extract(pre_out.img, pre_out.mask, pre_out.meta); KMeansModel().fit(vec[None, :], names)
-"""
-
 from __future__ import annotations
+from dataclasses import dataclass
 
 from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 
@@ -16,50 +9,46 @@ import numpy as np
 if TYPE_CHECKING:
     from Code.image.ImgPreproc import SegMeta  # pragma: no cover
 
-
+@dataclass(init=False)
 class ImgFeat:
     """Extractor de descriptores geométricos/fotométricos para objetos segmentados."""
 
-    _VALID_MODES = {"5D": 5, "7D": 7}
+    _VALID_MODES = {"3D": 3, "6D": 6}
 
-    def __init__(self, mode: str = "5D", use_meta: bool = True) -> None:
+    def __init__(self, mode: str = "3D", use_meta: bool = False) -> None:
         self.mode = mode.upper()
         if self.mode not in self._VALID_MODES:
-            raise ValueError(f"mode debe ser '5D' o '7D', no '{mode}'")
+            raise ValueError(f"mode debe ser '3D' o '6D', no '{mode}'")
         self.use_meta = bool(use_meta)
 
     # ------------------------------------------------------------------ #
     @staticmethod
-    def feature_names(mode: str = "5D") -> List[str]:
+    def feature_names(mode: str = "3D") -> List[str]:
         """Devuelve los nombres de features en el orden exacto del vector."""
 
         mode_norm = mode.upper()
-        if mode_norm == "5D":
+        if mode_norm == "3D":
             return [
                 "n_holes",
-                "hole_area_ratio",
+                "r_hull",
+                "radiar_var"
+            ]
+        if mode_norm == "6D":
+            return [
+                "n_holes",
+                "r_hull",
+                "radiar_var",
                 "circularity",
                 "solidity",
                 "inertia_ratio",
             ]
-        if mode_norm == "7D":
-            return [
-                "n_holes",
-                "hole_area_ratio",
-                "circularity",
-                "solidity",
-                "inertia_ratio",
-                "perimeter_ratio",
-                "inner_gradient",
-            ]
-        raise ValueError(f"mode debe ser '5D' o '7D', no '{mode}'")
+        raise ValueError(f"mode debe ser '3D' o '5D', no '{mode}'")
 
     # ------------------------------------------------------------------ #
     def extract(
         self,
         img_norm: np.ndarray,
-        mask: np.ndarray,
-        meta: Optional["SegMeta"] = None,
+        mask: np.ndarray
     ) -> Tuple[np.ndarray, List[str], Dict[str, object]]:
         """
         Calcula el vector de features y metadatos de apoyo.
@@ -92,24 +81,12 @@ class ImgFeat:
             debug["empty_mask"] = True
             return np.zeros(n_dim, dtype=np.float32), names, debug
 
-        img_f32 = np.asarray(img_norm, dtype=np.float32, copy=False)
+        img_f32 = np.asarray(img_norm, dtype=np.float32)
 
         contour = None
         rect = None
         inertia_ratio = None
         holes_meta = None
-
-        if self.use_meta and meta is not None:
-            contour = getattr(meta, "contour", None)
-            if contour is not None and len(contour) >= 3:
-                contour = np.asarray(contour, dtype=np.float32)
-            else:
-                contour = None
-            rect = getattr(meta, "rect", None)
-            inertia_ratio_meta = getattr(meta, "inertia_ratio", None)
-            if inertia_ratio_meta is not None:
-                inertia_ratio = float(inertia_ratio_meta)
-            holes_meta = getattr(meta, "holes", None)
 
         contour_from_mask = False
         hole_indices: List[int] = []
@@ -132,9 +109,7 @@ class ImgFeat:
             rect = cv2.minAreaRect(contour)
 
         centroid = tuple(rect[0]) if rect else (0.0, 0.0)
-
-        if self.use_meta and meta is not None and hasattr(meta, "centroid"):
-            centroid = getattr(meta, "centroid")
+        radial_var = self._radial_variation(contour, centroid)
 
         if inertia_ratio is None:
             inertia_ratio = self._inertia_ratio_from_moments(contour)
@@ -154,12 +129,16 @@ class ImgFeat:
                 hull_area = float(cv2.contourArea(hull)) if hull is not None else 0.0
                 rect = cv2.minAreaRect(contour)
 
+        hueco = 1 if n_holes >= 1 else 0
+
         hole_area = max(area - mask_area, 0.0)
         hole_area_ratio = hole_area / (area + 1e-9)
 
         circularity = (4.0 * np.pi * area) / (perimeter * perimeter + 1e-9)
         solidity = area / (hull_area + 1e-9) if hull_area > 0 else 0.0
-        perimeter_ratio = (perimeter / (hull_perimeter + 1e-9)) - 1.0
+        
+        r_hull = ((perimeter / (hull_perimeter + 1e-9)) - 1.0) * 3
+        
 
         inner_gradient = self._inner_gradient(img_f32, mask_u8)
 
@@ -177,20 +156,20 @@ class ImgFeat:
             circularity=circularity,
             solidity=solidity,
             inertia_ratio=inertia_ratio,
-            perimeter_ratio=perimeter_ratio,
+            r_hull=r_hull,
             inner_gradient=inner_gradient,
+            radiar_var=radial_var,
             contour_source="mask" if contour_from_mask else "meta",
         )
 
         vec_values = [
-            float(n_holes),
-            float(hole_area_ratio),
-            float(circularity),
-            float(solidity),
-            float(inertia_ratio),
+            float(hueco),
+            float(r_hull),
+            float(radial_var)
         ]
-        if self.mode == "7D":
-            vec_values.extend([float(perimeter_ratio), float(inner_gradient)])
+
+        if self.mode == "5D":
+            vec_values.extend([float(circularity), float(solidity), float(inertia_ratio)])
 
         vec = np.asarray(vec_values, dtype=np.float32)
         return vec, names, debug
@@ -302,3 +281,38 @@ class ImgFeat:
         if values.size == 0:
             return 0.0
         return float(np.median(values))
+
+    @staticmethod
+    def _radial_variation(contour: np.ndarray, centroid: tuple[float, float]) -> float:
+        """
+        Mide cuán constante es la distancia del contorno al centro.
+        Devuelve std(r) / mean(r). 
+        - Cercano a 0  -> contorno casi circular
+        - Más grande   -> contorno poligonal/irregular
+        """
+        if contour is None or len(contour) < 3:
+            return 0.0
+
+        cx, cy = centroid
+
+        # contour típico de OpenCV: (N, 1, 2). Lo aplastamos a (N, 2)
+        pts = contour.reshape(-1, 2).astype(np.float32)
+
+        xs = pts[:, 0]
+        ys = pts[:, 1]
+
+        rs = np.sqrt((xs - cx)**2 + (ys - cy)**2)
+
+        r_mean = float(rs.mean())
+        r_std  = float(rs.std())
+
+        if r_mean <= 1e-6:
+            return 0.0
+
+        radial_var = r_std / r_mean
+
+        radial_var = min(max(radial_var, 0), 0.05)
+        m = 20.0
+        radial_var = m*radial_var
+
+        return radial_var

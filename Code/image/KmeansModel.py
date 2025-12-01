@@ -4,174 +4,100 @@ import warnings
 from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
-from sklearn.cluster import KMeans as SKKMeans
-from sklearn.preprocessing import StandardScaler
+from dataclasses import dataclass, field
 
-
+@dataclass(slots=True)
 class KMeansModel:
-    """Wrapper fino sobre StandardScaler + sklearn.KMeans con trazabilidad de features."""
 
-    def __init__(self, n_clusters: int = 4, random_state: Optional[int] = 0) -> None:
-        if n_clusters <= 0:
-            raise ValueError("n_clusters debe ser > 0")
-        self.n_clusters = int(n_clusters)
-        self.random_state = random_state
-        self.scaler_: Optional[StandardScaler] = None
-        self.model_: Optional[SKKMeans] = None
-        self.feature_names_: Optional[List[str]] = None
-        self.dim_: Optional[int] = None
+    n_clusters: int = 2
+    max_iter: int = 300
+    tol: float = 1e-4
 
-    # ------------------------------------------------------------------ #
-    def fit(self, X: np.ndarray, feature_names: Optional[Sequence[str]] = None) -> "KMeansModel":
-        """Ajusta scaler + KMeans y registra dimensión/feature names."""
+    init_centers: np.ndarray | None = None
+    random_state : int | None = None
 
-        data = np.asarray(X, dtype=np.float64)
-        if data.ndim != 2:
-            raise ValueError("X debe tener shape (N, D)")
-        n_samples, dim = data.shape
-        if n_samples < self.n_clusters:
-            raise ValueError("n_clusters no puede superar la cantidad de muestras.")
+    centers_: np.ndarray | None = None
+    inertia_: float | None = None
 
-        self.dim_ = dim
-        if feature_names is not None:
-            feature_names = list(feature_names)
-            if len(feature_names) != dim:
-                raise ValueError(f"feature_names debe tener longitud {dim}, recibió {len(feature_names)}")
-            self.feature_names_ = list(feature_names)
+    def __post_init__(self) -> None:
+        if self.n_clusters <= 0:
+            raise ValueError(f"Cantidad de clusters debe ser mayor a cero: {self.n_cluster}")
+        if self.max_iter <= 0:
+            raise ValueError(f"Cantidad de iteraciones debe ser mayor a cero: {self.max_iter}")
+        
+    def fit(self, X: np.ndarray, init_centers: np.ndarray | None = None) -> np.ndarray:
+        X = self._check_X(X)
+        F = X.shape[1]
+        centers0 = init_centers if init_centers is not None else self.init_centers
+        if centers0 is not None:
+            centers = np.asarray(centers0, dtype=np.float64)
+            if centers.shape != (self.n_clusters, F):
+                raise ValueError(f"init_centers debe tener forma ({self.n_clusters}, {F})")
         else:
-            self.feature_names_ = [f"f{i}" for i in range(dim)]
+            centers = self._init_centers(X)
 
-        self.scaler_ = StandardScaler()
-        data_scaled = self.scaler_.fit_transform(data)
+        for _ in range(self.max_iter):
+            labels = self._assign_labels(X, centers)
+            new_centers = self._update_centers(X, labels, centers)
+            shift = np.linalg.norm(new_centers - centers, axis=1).max()
+            centers = new_centers
+            if shift < self.tol:
+                break
 
-        self.model_ = SKKMeans(
-            n_clusters=self.n_clusters,
-            random_state=self.random_state,
-            n_init="auto",
-        )
-        self.model_.fit(data_scaled)
-        return self
+        self.centers_ = centers
+        diff = X - centers[labels]
+        self.inertia_ = float(np.sum(diff**2))
+        return centers
 
-    # ------------------------------------------------------------------ #
     def predict(self, X: np.ndarray) -> np.ndarray:
-        """Predice labels validando que la dimensión coincida con la usada en fit."""
-
-        self._assert_fitted()
-        data = np.asarray(X, dtype=np.float64)
-        if data.ndim != 2:
-            raise ValueError("X debe tener shape (N, D)")
-        if data.shape[1] != self.dim_:
-            raise ValueError(
-                f"Se esperaban vectores con D={self.dim_} (features={self.feature_names_}), "
-                f"pero se recibió shape {data.shape}"
-            )
-        data_scaled = self.scaler_.transform(data)
-        labels = self.model_.predict(data_scaled)
-        return labels.astype(np.int64, copy=False)
+        if self.centers_ is None:
+            raise RuntimeError("Debes llamar a fit(X) antes de predict(X).")
+        X = self._check_X(X)
+        labels = self._assign_labels(X, self.centers_)
+        return labels
 
     # ------------------------------------------------------------------ #
-    def predict_one(self, vec: np.ndarray) -> int:
-        """Atajo para predecir una sola muestra."""
+    def _check_X(self, X: np.ndarray) -> np.ndarray:
+        X = np.asarray(X, dtype=np.float64)
+        if X.ndim != 2:
+            raise ValueError("X debe ser un array 2D de forma (N, F).")
+        N, F = X.shape
+        if N < self.n_clusters:
+            raise ValueError(f"n_clusters={self.n_clusters} no puede ser mayor que N={N}.")
+        return X
 
-        sample = np.asarray(vec, dtype=np.float64)
-        if sample.ndim == 1:
-            sample = sample.reshape(1, -1)
-        elif sample.ndim != 2 or sample.shape[0] != 1:
-            raise ValueError("predict_one acepta un vector (D,) o (1, D)")
-        return int(self.predict(sample)[0])
+    def _init_centers(self, X: np.ndarray) -> np.ndarray:
+        N, F = X.shape
+        rng = np.random.default_rng(self.random_state)
+        idx = rng.choice(N, size=self.n_clusters, replace=False)
+        centers = X[idx, :].copy()
+        return centers
 
-    # ------------------------------------------------------------------ #
-    def fit_predict(
-        self,
-        X: np.ndarray,
-        feature_names: Optional[Sequence[str]] = None,
-    ) -> np.ndarray:
-        """Ajusta el modelo y devuelve los labels en un único paso."""
-
-        return self.fit(X, feature_names=feature_names).predict(X)
-
-    # ------------------------------------------------------------------ #
-    def get_centers(self) -> Tuple[np.ndarray, Optional[List[dict]]]:
+    def _assign_labels(self, X: np.ndarray, centers: np.ndarray) -> np.ndarray:
         """
-        Retorna centroides desescalados y, si hay nombres, la versión mapeada.
-
-        Returns
-        -------
-        centers : np.ndarray
-            Centroides en el espacio original (shape (k, D)).
-        named_centers : list[dict] | None
-            Lista de diccionarios {feature: valor} por centroide.
+        Calcula distancias cuadradas de cada punto a cada centro:
+          d[i, k] = || X[i] - centers[k] ||^2
+        y asigna el centro más cercano.
         """
+        # X: (N, F), centers: (K, F)
+        # Usamos broadcasting: (N, 1, F) - (1, K, F) -> (N, K, F)
+        diff = X[:, np.newaxis, :] - centers[np.newaxis, :, :]
+        dist_sq = np.sum(diff**2, axis=2)  # (N, K)
+        labels = np.argmin(dist_sq, axis=1)  # (N,)
+        return labels
 
-        self._assert_fitted()
-        centers_scaled = self.model_.cluster_centers_
-        centers = self.scaler_.inverse_transform(centers_scaled)
-        named = None
-        if self.feature_names_:
-            named = [
-                {name: float(val) for name, val in zip(self.feature_names_, center)}
-                for center in centers
-            ]
-        return centers.astype(np.float64, copy=False), named
+    def _update_centers(self, X: np.ndarray, labels: np.ndarray, old_centers: np.ndarray) -> np.ndarray:
+        N, F = X.shape
+        K = self.n_clusters
+        centers = np.zeros((K, F), dtype=np.float64)
 
-    # ------------------------------------------------------------------ #
-    def _assert_fitted(self) -> None:
-        if self.model_ is None or self.scaler_ is None or self.dim_ is None:
-            raise RuntimeError("El modelo no está entrenado. Llamá primero a fit().")
+        for k in range(K):
+            mask = (labels == k)
+            if not np.any(mask):
+                # Cluster vacío: re-inicializar en un punto aleatorio
+                idx = np.random.randint(0, N)
+                centers[k] = X[idx]
+            else:
+                centers[k] = X[mask].mean(axis=0)
 
-
-# ------------------------------------------------------------------------------ #
-# Legacy wrapper for backwards compatibility
-# ------------------------------------------------------------------------------ #
-class KMeans(KMeansModel):
-    """Compatibilidad con la API anterior basada en KMeans propio."""
-
-    def __init__(
-        self,
-        k: int,
-        tol: float = 1e-4,
-        max_iter: int = 100,
-        random_state: Optional[int] = None,
-    ) -> None:
-        warnings.warn(
-            "KMeans está deprecado. Usa KMeansModel para obtener scaler y validaciones.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        super().__init__(n_clusters=k, random_state=random_state)
-        self._legacy_tol = tol
-        self._legacy_max_iter = max_iter
-
-    def fit(self, matParametros: np.ndarray, seeds: Optional[np.ndarray] = None) -> "KMeans":
-        if seeds is not None:
-            warnings.warn(
-                "El parámetro seeds se ignora en la versión basada en sklearn.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-        super().fit(matParametros)
-        return self
-
-    def predict(self, matParametros: np.ndarray) -> np.ndarray:
-        return super().predict(matParametros)
-
-    def predict_one(self, vec: np.ndarray) -> int:
-        return super().predict_one(vec)
-
-    def fit_predict(self, matParametros: np.ndarray) -> np.ndarray:
-        return super().fit_predict(matParametros)
-
-    def predict_info(self, matParametros: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        warnings.warn(
-            "predict_info está deprecado; usa KMeansModel.get_centers para analizar distancias.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        labels = self.predict(matParametros)
-        data = np.asarray(matParametros, dtype=np.float64)
-        if data.ndim == 1:
-            data = data.reshape(1, -1)
-        data_scaled = self.scaler_.transform(data)
-        dist = self.model_.transform(data_scaled)
-        min_dist = np.min(dist, axis=1)
-        return labels, (min_dist ** 2).astype(np.float64, copy=False)
+        return centers
