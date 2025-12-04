@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 from collections import Counter
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, Optional, Sequence, Tuple, Union
 
 import cv2
 import numpy as np
@@ -14,7 +14,7 @@ from Code.image.ImgPreproc import ImgPreproc, ImgPreprocCfg
 from Code.image.ImgFeat import ImgFeat, hyper_params
 from Code.image.KmeansModel import KMeansModel
 
-ImagePath = Union[str, Path]
+ImagePath = str | Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 VALID_EXTS = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp")
 
@@ -61,12 +61,12 @@ class ImgOrchestrator:
 
 	cfg: OrchestratorCfg = field(default_factory=OrchestratorCfg)
 	class_names: list[str] = field(default_factory=list)
-	class_colors: Dict[str, Tuple[int, int, int]] = field(default_factory=dict)
+	class_colors: dict[str, tuple[int, int, int]] = field(default_factory=dict)
 	feature_names: list[str] = field(default_factory=list, init=False)
 	oni_tau_global: float = 0.15
-	oni_tau_por_cluster: Optional[Dict[int, float]] = None
-	cluster_to_label: Dict[int, str] = field(default_factory=dict, init=False)
-	_last_fit_features: Optional[MatF] = field(default=None, init=False, repr=False)
+	oni_tau_por_cluster: dict[int, float] | None = None
+	cluster_to_label: dict[int, str] = field(default_factory=dict, init=False)
+	_last_fit_features: MatF | None = field(default=None, init=False, repr=False)
 
 	# ------------------------------------------------------------------ #
 	# Entrenamiento, carga y guardado de modelos
@@ -76,10 +76,10 @@ class ImgOrchestrator:
 		dataset_dir: ImagePath,
 		*,
 		run: int = 1,
-		seeds: Optional[np.ndarray] = None,
-		output_root: Optional[ImagePath] = None,
-		labels: Optional[Sequence[str]] = None,
-	) -> Dict[str, Any]:
+		seeds: np.ndarray | None = None,
+		output_root: ImagePath | None = None,
+		labels: Sequence[str] | None = None,
+	) -> dict[str, Any]:
 		"""
 		Pipeline completo estilo notebook:
 		- Lee imágenes de subcarpetas dentro de `dataset_dir`.
@@ -96,7 +96,7 @@ class ImgOrchestrator:
 			Centros iniciales opcionales (shape (k, F)). Si se proveen, definen k.
 		output_root : str | Path | None
 			Carpeta base para salidas. Default: `PROJECT_ROOT/Database/tmp/image`.
-		labels : Sequence[str] | None
+		labels : sequence[str] | None
 			Si se indica, solo usa las carpetas con esos nombres (case-insensitive).
 		"""
 		dataset_path = Path(dataset_dir)
@@ -338,7 +338,7 @@ class ImgOrchestrator:
 	def _procesar_para_vector(
 			self,
 			entrada: Union[ImagePath, ColorImageU8]
-			) -> Tuple[np.ndarray, GrayImageF32, MaskU8]:
+			) -> tuple[np.ndarray, GrayImageF32, MaskU8]:
 		"""
 		### Pipeline interno
 		Normaliza, segmenta y extrae el vector de características.
@@ -354,8 +354,8 @@ class ImgOrchestrator:
 
 	def _preparar_caracteristicas(
 			self, 
-			paths: Sequence[ImagePath]
-			) -> Tuple[MatF, list[str]]:
+			paths: sequence[ImagePath]
+			) -> tuple[MatF, list[str]]:
 		"""
 		### Construcción de dataset
 		Convierte rutas en matriz N×D float64 y etiqueta por carpeta.
@@ -402,7 +402,7 @@ class ImgOrchestrator:
 	def _build_mapping(
 			self, 
 			assignments: np.ndarray, 
-			labels: Sequence[str]
+			labels: sequence[str]
 			) -> Dict[int, str]:
 		"""
 		### Etiquetado mayoritario

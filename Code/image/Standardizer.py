@@ -1,6 +1,5 @@
 from dataclasses import dataclass, field
 import numpy as np
-from typing import Tuple, Optional
 import scipy.signal as sps
 
 from Code.types import VecF, MatF, F32
@@ -10,8 +9,8 @@ class Standardizer:
 	"""
 	Z-score por dimensión: x' = (x - mu)/sigma.
 	"""
-	mu: Optional[np.ndarray] = None     # (D,)
-	sigma: Optional[np.ndarray] = None  # (D,)
+	mu: np.ndarray | None = None     # (D,)
+	sigma: np.ndarray | None = None  # (D,)
 	eps: float = 1e-8                   # evita divisiones por ~0
 
 	# ---- entrenamiento (calcula estadísticas de TRAIN) ----

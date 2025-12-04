@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional, Sequence, Union, List, Dict, Tuple
 
 import numpy as np
 
@@ -27,14 +27,14 @@ class AudioOrchestrator:
     feat: AudioFeat = field(default_factory=AudioFeat)
     stats: Standardizer = field(default_factory=Standardizer)
     knn: KnnModel = field(default_factory=KnnModel)
-    _X_store: Optional[np.ndarray] = field(default=None, init=False, repr=False)       # (N, D) std
-    _y_store: Optional[np.ndarray] = field(default=None, init=False, repr=False)       # (N,)
-    _X_store_raw: Optional[np.ndarray] = field(default=None, init=False, repr=False)   # (N, D_raw)
-    _X_store_proj: Optional[np.ndarray] = field(default=None, init=False, repr=False)  # (N, k)
-    _feature_names: Optional[List[str]] = field(default=None, init=False, repr=False)
-    _eigvecs: Optional[np.ndarray] = field(default=None, init=False, repr=False)       # (D, D)
-    _eigvals: Optional[np.ndarray] = field(default=None, init=False, repr=False)       # (D,)
-    _k_used: Optional[int] = field(default=None, init=False, repr=False)
+    _X_store: np.ndarray | None = field(default=None, init=False, repr=False)       # (N, D) std
+    _y_store: np.ndarray | None = field(default=None, init=False, repr=False)       # (N,)
+    _X_store_raw: np.ndarray | None = field(default=None, init=False, repr=False)   # (N, D_raw)
+    _X_store_proj: np.ndarray | None = field(default=None, init=False, repr=False)  # (N, k)
+    _feature_names: list[str] | None = field(default=None, init=False, repr=False)
+    _eigvecs: np.ndarray | None = field(default=None, init=False, repr=False)       # (D, D)
+    _eigvals: np.ndarray | None = field(default=None, init=False, repr=False)       # (D,)
+    _k_used: int | None = field(default=None, init=False, repr=False)
 
     # -------------------------------------------------------------------------------------------------  #
     #                                      --------- Entrenamiento ---------                             #
@@ -46,9 +46,9 @@ class AudioOrchestrator:
         labels: Sequence[str],
         *,
         var_objetivo: float = 0.95,
-        k_componentes: Optional[int] = None,
-        guardar_en: Optional[Path | str] = None,
-    ) -> Dict[str, Union[int, float]]:
+        k_componentes: int | None = None,
+        guardar_en: Path | str | None = None,
+    ) -> dict[str, int | float]:
         """
         ### Entrenar orquestador
         Preprocesa audios, extrae features, ajusta Standardizer, aplica PCA y carga KNN.
@@ -131,7 +131,7 @@ class AudioOrchestrator:
             labels=np.array(self._y_store, dtype=np.str_),
             feature_names=np.array(self._feature_names, dtype=object) if self._feature_names else None,
             knn_k=self.knn.cfg.k,
-            knn_metric=str(self.knn.cfg.metric),
+            knn_metric=str(self.knn.cfg.tipo_distancia),
             knn_weighted=self.knn.cfg.weighted,
         )
 
@@ -169,7 +169,7 @@ class AudioOrchestrator:
         self._y_store = labels
 
         # reconstruir KNN con config guardada
-        self.knn = KnnModel(cfg=KnnConfig(k=knn_k, metric=knn_metric, weighted=knn_weighted))
+        self.knn = KnnModel(cfg=KnnConfig(k=knn_k, tipo_distancia=knn_metric, weighted=knn_weighted))
         self.knn.cargar_lote(X_proj, labels.tolist())
 
     # -------------------------------------------------------------------------------------------------  #
@@ -178,10 +178,10 @@ class AudioOrchestrator:
 
     def predecir_comando(
         self,
-        entrada: Union[AudioPath, Tuple[np.ndarray, int], np.ndarray],
+        entrada: AudioPath | tuple[np.ndarray, int] | np.ndarray,
         *,
         devolver_distancia: bool = True,
-    ) -> Dict[str, Union[str, float]]:
+    ) -> dict[str, str | float]:
         """
         ### Inferencia
         Preprocesa la entrada, extrae features, z-score, proyecta y predice con KNN.
@@ -194,7 +194,7 @@ class AudioOrchestrator:
         vec_proj = vec_std @ self._eigvecs[:, :k]
 
         label = self.knn.predecir(vec_proj.astype(np.float32, copy=False))
-        salida: Dict[str, Union[str, float]] = {"label": label}
+        salida: dict[str, str | float] = {"label": label}
         
         if devolver_distancia:
             distancias = self.knn.distancias(vec_proj.astype(np.float32, copy=False))
@@ -218,15 +218,15 @@ class AudioOrchestrator:
 
     def _preprocesar_audio(
         self,
-        entrada: Union[AudioPath, Tuple[np.ndarray, int], np.ndarray],
+        entrada: AudioPath | tuple[np.ndarray, int] | np.ndarray,
     ) -> tuple[np.ndarray, int]:
         if isinstance(entrada, (str, Path)):
             return self.preproc.preprocesar_desde_path(entrada)
         if isinstance(entrada, tuple) and len(entrada) == 2:
             y, sr = entrada
-            return self.preproc.preprocesar(np.asarray(y, dtype=np.float32), int(sr))
+            return self.preproc.procesar(np.asarray(y, dtype=np.float32), int(sr))
         if isinstance(entrada, np.ndarray):
-            return self.preproc.preprocesar(np.asarray(entrada, dtype=np.float32), self.preproc.cfg.target_sr)
+            return self.preproc.procesar(np.asarray(entrada, dtype=np.float32), self.preproc.cfg.target_sr)
         raise TypeError("Entrada inválida. Usa path, (y, sr) o np.ndarray.")
 
     def _ensure_listo(self) -> None:

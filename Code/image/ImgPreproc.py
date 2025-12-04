@@ -40,7 +40,7 @@ class ImgPreproc:
 	- Devuelve imagen y máscara ya redimensionadas a `target_size`.
 	"""
 
-	cfg: ImgPreprocCfg = field(default_factory=ImgPreprocCfg)
+	config: ImgPreprocCfg = field(default_factory=ImgPreprocCfg)
 
 	# ------------------------------------------------------------------ #
 	# API pública
@@ -54,7 +54,7 @@ class ImgPreproc:
 		Ejecuta el pipeline completo sobre una imagen BGR/Gray.
 
 		Devuelve `PreprocOutput` con:
-		- `img`   : float32 en [0, 1], tamaño `cfg.target_size`.
+		- `img`   : float32 en [0, 1], tamaño `config.target_size`.
 		- `mask`  : uint8 {0,255}, alineada con `img`.
 		- `meta`  : detalles geométricos del objeto detectado (o `None`).
 		"""
@@ -63,7 +63,7 @@ class ImgPreproc:
 		
 		img_sq, mask_sq = self._recortar(img_color, mask_obj)
 		
-		if self.cfg.flag_refine_mask:
+		if self.config.flag_refine_mask:
 			mask_sq = self._refinar_mask(mask_sq)
 
 		if blacknwhite:
@@ -103,7 +103,7 @@ class ImgPreproc:
 			raise ValueError("La imagen de entrada está vacía.")
 
 		gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-		gray_blur = cv.GaussianBlur(src=gray, ksize=(0, 0), sigmaX=self.cfg.sigma)
+		gray_blur = cv.GaussianBlur(src=gray, ksize=(0, 0), sigmaX=self.config.sigma)
 
 		# Aplicar Otsu
 		_, mask = cv.threshold(
@@ -183,8 +183,8 @@ class ImgPreproc:
 		bw = x2 - x1
 		bh = y2 - y1
 
-		extra_w = int(bw * self.cfg.margin / 2)
-		extra_h = int(bh * self.cfg.margin / 2)
+		extra_w = int(bw * self.config.margin / 2)
+		extra_h = int(bh * self.config.margin / 2)
 
 		x1 = max(0, x1 - extra_w)
 		x2 = min(w, x2 + extra_w)
@@ -199,7 +199,7 @@ class ImgPreproc:
 		mask: Mask,
 		) -> tuple[ImgColor, Mask]:
 		"""
-		Recorta la imagen según la máscara y la redimensiona a un cuadrado de `self.cfg.target_size` x `self.cfg.target_size`.
+		Recorta la imagen según la máscara y la redimensiona a un cuadrado de `self.config.target_size` x `self.config.target_size`.
 		
 		Pipeline:
 		1. Extrae bounding box de la máscara.
@@ -211,11 +211,11 @@ class ImgPreproc:
 		Args:
 		img: Imagen de entrada (BGR o escala de grises).
 		mask: Máscara binaria asociada a la imagen.
-		self.cfg.target_size: Dimensión final del cuadrado (default: 256).
+		self.config.target_size: Dimensión final del cuadrado (default: 256).
 		
 		Returns:
 		Tupla (img_sq, mask_sq) con imagen y máscara redimensionadas y centradas
-		en un lienzo cuadrado de tamaño `self.cfg.target_size` x `self.cfg.target_size`.
+		en un lienzo cuadrado de tamaño `self.config.target_size` x `self.config.target_size`.
 		"""
 
 		x1, y1, x2, y2 = self._bbox_desde_mask(mask)
@@ -225,18 +225,18 @@ class ImgPreproc:
 		mask_crop = mask[y1:y2, x1:x2]
 
 		h, w = img_crop.shape[:2]
-		scale = self.cfg.target_size / max(h, w)
+		scale = self.config.target_size / max(h, w)
 		new_w = int(round(w * scale))
 		new_h = int(round(h * scale))
 
 		img_resized = cv.resize(img_crop, (new_w, new_h), interpolation=cv.INTER_AREA)
 		mask_resized = cv.resize(mask_crop, (new_w, new_h), interpolation=cv.INTER_NEAREST)
 
-		img_sq = np.zeros((self.cfg.target_size, self.cfg.target_size, 3), dtype=img.dtype)
-		mask_sq = np.zeros((self.cfg.target_size, self.cfg.target_size), dtype=mask.dtype)
+		img_sq = np.zeros((self.config.target_size, self.config.target_size, 3), dtype=img.dtype)
+		mask_sq = np.zeros((self.config.target_size, self.config.target_size), dtype=mask.dtype)
 
-		y_off = (self.cfg.target_size - new_h) // 2
-		x_off = (self.cfg.target_size - new_w) // 2
+		y_off = (self.config.target_size - new_h) // 2
+		x_off = (self.config.target_size - new_w) // 2
 
 		img_sq[y_off:y_off+new_h, x_off:x_off+new_w] = img_resized
 		mask_sq[y_off:y_off+new_h, x_off:x_off+new_w] = mask_resized
@@ -266,8 +266,8 @@ class ImgPreproc:
 		ValueError: 
 		Si open_ksize o close_ksize no son números impares y/o menores a cero.
 		"""
-		open_ksize = self.cfg.open_ksize
-		close_ksize = self.cfg.close_ksize
+		open_ksize = self.config.open_ksize
+		close_ksize = self.config.close_ksize
 
 		if open_ksize <= 0 or close_ksize <= 0 or open_ksize % 2 == 0 or close_ksize % 2 == 0:
 			raise ValueError("Los kernels deben ser impares y > 0.")

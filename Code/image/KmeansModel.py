@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-import warnings
-from typing import List, Optional, Sequence, Tuple
+from typing import ClassVar
 
 import numpy as np
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 @dataclass(slots=True)
 class KMeansModel:
 
 	n_clusters: int = 2
 	max_iter: int = 300
-	tol: float = 1e-4
+	epsilon: ClassVar[float] = float(np.finfo(np.float32).eps)
 
 	init_centers: np.ndarray | None = None
 	random_state : int | None = None
@@ -45,7 +44,7 @@ class KMeansModel:
 			new_centers = self._update_centers(X, labels, centers)
 			shift = np.linalg.norm(new_centers - centers, axis=1).max()
 			centers = new_centers
-			if shift < self.tol:
+			if shift < self.epsilon:
 				break
 
 		self._centers = centers

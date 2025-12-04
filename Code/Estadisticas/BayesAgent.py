@@ -1,7 +1,7 @@
 # domain/BayesAgent.py
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Literal, Sequence
+from typing import Literal
 import numpy as np
 
 from Code.types import VecF, VecI, MatF, ArrayLike, DTYPE
@@ -120,7 +120,7 @@ class BayesAgent:
     def decide(
         self,
         vecPost: VecF,
-        labels: Sequence[str] | None = None,
+        labels: sequence[str] | None = None,
         *,
         tie: Literal["first", "random", "all"] = "first",
         tol: float = 1e-12,
