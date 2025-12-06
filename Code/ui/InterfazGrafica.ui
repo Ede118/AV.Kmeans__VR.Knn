@@ -58,7 +58,7 @@
     <normaloff>.</normaloff>.</iconset>
   </property>
   <widget class="QWidget" name="centralwidget">
-   <layout class="QVBoxLayout" name="verticalLayout" stretch="1,3">
+   <layout class="QVBoxLayout" name="verticalLayout" stretch="1,5">
     <property name="leftMargin">
      <number>9</number>
     </property>
@@ -67,7 +67,17 @@
       <property name="title">
        <string/>
       </property>
-      <layout class="QGridLayout" name="gridLayout">
+      <layout class="QGridLayout" name="gridLayout" rowminimumheight="0,0,0,0">
+       <item row="0" column="0">
+        <widget class="QPushButton" name="BotonImagen">
+         <property name="toolTip">
+          <string>Seleccionar una única imagen para análisis</string>
+         </property>
+         <property name="text">
+          <string>Analizar Imagen</string>
+         </property>
+        </widget>
+       </item>
        <item row="0" column="1">
         <widget class="QLabel" name="ImagenPath">
          <property name="styleSheet">
@@ -95,13 +105,13 @@ padding: 2px 4px;
          </property>
         </widget>
        </item>
-       <item row="0" column="0">
-        <widget class="QPushButton" name="BotonImagen">
+       <item row="1" column="0">
+        <widget class="QPushButton" name="BotonCarpeta">
          <property name="toolTip">
-          <string>Seleccionar una única imagen para análisis</string>
+          <string>Seleccionar carpeta con imágenes a analizar</string>
          </property>
          <property name="text">
-          <string>Analizar Imagen</string>
+          <string>Analizar Carpeta</string>
          </property>
         </widget>
        </item>
@@ -120,16 +130,6 @@ padding: 2px 4px;
          </property>
          <property name="text">
           <string>/home/barrios14101/Documents/GitHub/IA/Database/AV</string>
-         </property>
-        </widget>
-       </item>
-       <item row="1" column="0">
-        <widget class="QPushButton" name="BotonCarpeta">
-         <property name="toolTip">
-          <string>Seleccionar carpeta con imágenes a analizar</string>
-         </property>
-         <property name="text">
-          <string>Analizar Carpeta</string>
          </property>
         </widget>
        </item>
@@ -271,9 +271,15 @@ QPushButton:hover {
       <property name="title">
        <string/>
       </property>
-      <layout class="QHBoxLayout" name="horizontalLayout">
+      <layout class="QHBoxLayout" name="horizontalLayout" stretch="1,2,2">
        <item>
-        <widget class="QWidget" name="DataFrame" native="true"/>
+        <widget class="QWidget" name="FRAME" native="true">
+         <layout class="QGridLayout" name="gridLayout_2">
+          <item row="0" column="0">
+           <widget class="QTableView" name="DataFrame"/>
+          </item>
+         </layout>
+        </widget>
        </item>
        <item>
         <widget class="QWidget" name="KMeansGraph" native="true"/>
@@ -301,24 +307,6 @@ QPushButton:hover {
    <property name="nativeMenuBar">
     <bool>true</bool>
    </property>
-   <widget class="QMenu" name="menuPrincipal">
-    <property name="title">
-     <string>Principal</string>
-    </property>
-   </widget>
-   <widget class="QMenu" name="menuAV_Debug">
-    <property name="title">
-     <string>AV Debug</string>
-    </property>
-   </widget>
-   <widget class="QMenu" name="menuVR_Debug">
-    <property name="title">
-     <string>VR Debug</string>
-    </property>
-   </widget>
-   <addaction name="menuPrincipal"/>
-   <addaction name="menuAV_Debug"/>
-   <addaction name="menuVR_Debug"/>
   </widget>
   <widget class="QStatusBar" name="statusbar">
    <property name="enabled">

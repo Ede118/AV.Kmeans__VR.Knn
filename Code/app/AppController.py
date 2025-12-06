@@ -48,7 +48,7 @@ class AppController:
 
 		# Labels de las hipótesis (puedes cambiarlos por algo más lindo luego)
 		self.bayes_labels = ["a", "b", "c", "d"]
-		
+
 		try:
 			self.IOrch.cargar_modelo("Database/models/kmeans.npz")
 		except Exception as exc:
@@ -191,24 +191,36 @@ class AppController:
 		return self._last_img_df
 
 	def _contar_por_cluster(
-			self,
-			df: pd.DataFrame,
-			column: str = "cluster",
-			num_categories: int | None = None,
-		) -> np.ndarray:
-			"""
-			Cuenta cuántos elementos hay en cada cluster.
+		self,
+		df: pd.DataFrame,
+		column: str | None = None,
+		num_categories: int | None = None,
+	) -> np.ndarray:
+		"""
+		Devuelve un vector n de longitud C con los conteos por cluster.
 
-			Devuelve un vector n de longitud C:
-				n[j] = cantidad de filas con df[column] == j
-			"""
-			clusters = df[column].to_numpy(dtype=int)
+		- column: nombre de la columna con el cluster. Si es None,
+			intenta adivinarlo entre varios nombres típicos.
+		"""
+		if column is None:
+			candidatos = ["cluster", "Cluster", "Número de Cluster", "Número de Cluste"]
+			for c in candidatos:
+				if c in df.columns:
+					column = c
+					break
+		if column is None or column not in df.columns:
+			raise ValueError(
+				f"No se encontró columna de cluster en el DataFrame. "
+				f"Columnas disponibles: {list(df.columns)}"
+			)
 
-			if num_categories is None:
-				num_categories = int(clusters.max()) + 1
+		clusters = df[column].to_numpy(dtype=int)
 
-			n = np.bincount(clusters, minlength=num_categories)
-			return n
+		if num_categories is None:
+			num_categories = int(clusters.max()) + 1
+
+		n = np.bincount(clusters, minlength=num_categories)
+		return n
 
 	def new_bayes(
 		self,
@@ -281,6 +293,48 @@ class AppController:
 			use_logs=use_logs,
 			strict_zeros=strict_zeros,
 		)
+
+	def bayes_desde_df_clusters(
+		self,
+		df: pd.DataFrame,
+		pi: np.ndarray,
+		P: np.ndarray,
+		labels_hipotesis: list[str],
+		*,
+		column: str | None = None,
+		use_logs: bool = True,
+		strict_zeros: bool = True,
+	) -> tuple[np.ndarray, str | list[str]]:
+		"""
+		Aplica Bayes usando los clusters del DataFrame como categorías observadas.
+
+		- df: DataFrame con una columna de cluster.
+		- pi: prior sobre hipótesis, shape (K,)
+		- P: matriz de likelihood, shape (K, C)
+		- labels_hipotesis: nombres de las hipótesis (len K)
+		- column: nombre de la columna con el cluster (si None, se infiere).
+		"""
+		pi = np.asarray(pi, float).reshape(-1)
+		P = np.asarray(P, float)
+
+		K, C = P.shape
+		if pi.shape[0] != K:
+			raise ValueError(f"pi debe tener tamaño {K}, vino {pi.shape[0]}")
+		if len(labels_hipotesis) != K:
+			raise ValueError(
+				f"labels_hipotesis debe tener {K} elementos, vino {len(labels_hipotesis)}"
+			)
+
+		# 1) conteos por cluster
+		n = self._contar_por_cluster(df, column=column, num_categories=C)
+
+		# 2) posterior con BayesAgent
+		post = self.Bayes.posterior(pi, P, n, use_logs=use_logs, strict_zeros=strict_zeros)
+
+		# 3) decisión
+		decision = self.Bayes.decide(post, labels=labels_hipotesis)
+
+		return post, decision
 
 
 	def grabar_audio(self, *, duracion_segundos: float, ruta_salida: Path) -> None:

@@ -144,6 +144,7 @@ class MainWindow(QtWidgets.QMainWindow):
 			self._kmeans_canvas = FigureCanvas(Figure(figsize=(5, 4)))
 			# 3D
 			self._kmeans_ax = self._kmeans_canvas.figure.add_subplot(111, projection="3d")
+			self._kmeans_cbar = None
 
 			layout = QtWidgets.QVBoxLayout(self.KMeansGraph)
 			layout.setContentsMargins(0, 0, 0, 0)
@@ -151,6 +152,7 @@ class MainWindow(QtWidgets.QMainWindow):
 		else:
 			self._kmeans_canvas = None
 			self._kmeans_ax = None
+			self._kmeans_cbar = None
 
 		# --------- BAYES: gráfico de barras ----------
 		if hasattr(self, "BayesGraph"):
@@ -319,6 +321,9 @@ class MainWindow(QtWidgets.QMainWindow):
 				self._accion_contar()
 			elif label in ("proporcion", "proporción", "proportion"):
 				self._accion_proporcion()
+			elif label in ("salir", "exit", "quit", "cerrar"):
+				# Cerrar ventana y terminar la aplicación
+				QtWidgets.QApplication.quit()
 			else:
 				QtWidgets.QMessageBox.information(
 					self,
@@ -539,48 +544,36 @@ class MainWindow(QtWidgets.QMainWindow):
 				fontsize=8,
 			)
 
+		self._bayes_ax.grid(
+			True,
+			axis="y",         # solo horizontal
+			linestyle="--",
+			linewidth=0.5,
+			alpha=0.4,
+		)
+
 		self._bayes_canvas.draw()
 
 	def _accion_proporcion(self) -> None:
 		"""
 		Comando 'proporción':
-		- usa la última carpeta clasificada,
+		- usa el último DataFrame de imágenes,
 		- aplica Bayes sobre los clusters,
 		- actualiza el gráfico de Bayes.
 		"""
-		# Asegurarse de tener un DF cargado
-		df = self._controller.get_last_img_df()
+		# Asegurarse de tener DF
+		df = self._controller._last_img_df
 		if df is None:
-			if not hasattr(self, "_last_folder_path") or self._last_folder_path is None:
-				QtWidgets.QMessageBox.warning(
-					self,
-					"Bayes",
-					"No hay datos de imágenes cargados para calcular proporciones."
-				)
-				return
-			# Si hay carpeta pero no DF, lo regeneramos
-			try:
-				df = self._controller.clasificar_carpeta_img_df(self._last_folder_path)
-			except Exception as exc:
-				QtWidgets.QMessageBox.critical(
-					self,
-					"Bayes",
-					f"No se pudo clasificar la carpeta para Bayes:\n{exc}"
-				)
-				return
-
-		# Necesitás pi, P y etiquetas de hipótesis definidos en AppController
-		try:
-			pi = self._controller.bayes_pi          # np.ndarray (K,)
-			P = self._controller.bayes_P            # np.ndarray (K, C)
-			labels_hip = self._controller.bayes_labels  # list[str] len K
-		except AttributeError:
-			QtWidgets.QMessageBox.critical(
+			QtWidgets.QMessageBox.warning(
 				self,
 				"Bayes",
-				"Faltan parámetros bayes_pi, bayes_P o bayes_labels en AppController."
+				"No hay datos de imágenes cargados para calcular proporciones."
 			)
 			return
+
+		pi = self._controller.bayes_pi
+		P = self._controller.bayes_P
+		labels_hip = self._controller.bayes_labels
 
 		try:
 			post, decision = self._controller.bayes_desde_df_clusters(
@@ -588,6 +581,7 @@ class MainWindow(QtWidgets.QMainWindow):
 				pi,
 				P,
 				labels_hip,
+				# column=None deja que el controller adivine la columna correcta
 				use_logs=True,
 				strict_zeros=True,
 			)
@@ -599,12 +593,13 @@ class MainWindow(QtWidgets.QMainWindow):
 			)
 			return
 
-		# Mostrar decisión en algún label si querés
+		# actualizamos label si existe
 		if hasattr(self, "BayesDecisionLabel"):
 			self.BayesDecisionLabel.setText(f"Hipótesis más probable: {decision}")
 
-		# Actualizar gráfico de barras
+		# y el gráfico
 		self._update_bayes_plot(post, labels_hip)
+
 
 	# =========================================================
 	# 8) Lógica de gráficos KMeans
@@ -658,6 +653,11 @@ class MainWindow(QtWidgets.QMainWindow):
 		if self._kmeans_canvas is None or self._kmeans_ax is None:
 			return
 
+		# Limpiar colorbar previo si existe
+		if hasattr(self, "_kmeans_cbar") and self._kmeans_cbar is not None:
+			self._kmeans_cbar.remove()
+			self._kmeans_cbar = None
+
 		try:
 			# IMPORTANTE: acá usamos el método que devuelve datos,
 			# NO el que devuelve una Figure.
@@ -681,11 +681,21 @@ class MainWindow(QtWidgets.QMainWindow):
 		# Limpiamos el eje antes de redibujar
 		self._kmeans_ax.clear()
 
+		# Reordenar features al orden lógico de ejes:
+		# ImgFeat extrae [huecos, r_hull, variacion_radial]
+		huecos = X[:, 0]
+		r_hull = X[:, 1]
+		radial_var = X[:, 2]
+
+		cen_huecos = centroids[:, 0]
+		cen_r_hull = centroids[:, 1]
+		cen_radial_var = centroids[:, 2]
+
 		# Puntos: cada imagen, coloreada por cluster
 		sc = self._kmeans_ax.scatter(
-			X[:, 0],
-			X[:, 1],
-			X[:, 2],
+			r_hull,
+			radial_var,
+			huecos,
 			c=clusters,
 			s=30,
 			alpha=0.8,
@@ -694,9 +704,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
 		# Centroides: marcadores 'X' rojos, más finos
 		self._kmeans_ax.scatter(
-			centroids[:, 0],
-			centroids[:, 1],
-			centroids[:, 2],
+			cen_r_hull,
+			cen_radial_var,
+			cen_huecos,
 			marker="X",
 			s=60,
 			c="red",
@@ -709,15 +719,17 @@ class MainWindow(QtWidgets.QMainWindow):
 		self._kmeans_ax.set_ylabel("variación radial")
 		self._kmeans_ax.set_zlabel("huecos")
 
-		# Tus features están normalizadas en [0, 1], así que fijamos límites:
-		self._kmeans_ax.set_xlim(0.0, 1.0)
-		self._kmeans_ax.set_ylim(0.0, 1.0)
-		self._kmeans_ax.set_zlim(0.0, 1.0)
+		# Límites dinámicos (huecos suele ser entero pequeño; r_hull y radial_var ya están normalizados)
+		self._kmeans_ax.set_xlim(min(0.0, r_hull.min()), max(1.0, r_hull.max()))
+		self._kmeans_ax.set_ylim(min(0.0, radial_var.min()), max(1.0, radial_var.max()))
+		self._kmeans_ax.set_zlim(0.0, max(1.0, huecos.max() * 1.1))
 
 		# Si querés barra de color en el futuro, acá podrías crearla,
 		# pero en Qt es más cómodo dejar solo el scatter.
 
 		# Forzar el redibujado en el canvas
+		self._kmeans_cbar = self._kmeans_canvas.figure.colorbar(sc, ax=self._kmeans_ax, shrink=0.7, pad=0.05)
+		self._kmeans_cbar.set_label("Cluster")
 		self._kmeans_canvas.draw()
 
 
