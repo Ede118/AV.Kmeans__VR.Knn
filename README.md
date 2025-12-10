@@ -125,10 +125,10 @@ Además, contiene los directorios:
 - **Objetivo:** inferir cuál de las cajas fue abierta, dadas las proporciones observadas.
     
 - **Modelo probabilístico:**  
-    $$  
+    [
     P(H_k \mid \mathbf{n}) =  
     \frac{P(H_k)\prod_i p_{k,i}^{n_i}}{\sum_j P(H_j)\prod_i p_{j,i}^{n_i}}  
-    $$
+    ]
     
 - **Implementación estable numéricamente:**  
     $$  
