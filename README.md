@@ -124,17 +124,18 @@ Además, contiene los directorios:
 
 - **Objetivo:** inferir cuál de las cajas fue abierta, dadas las proporciones observadas.
     
-- **Modelo probabilístico:**  
-    [
-    P(H_k \mid \mathbf{n}) =  
-    \frac{P(H_k)\prod_i p_{k,i}^{n_i}}{\sum_j P(H_j)\prod_i p_{j,i}^{n_i}}  
-    ]
-    
+- **Modelo probabilístico:**
+
+$$
+P(H_k \mid \mathbf{n}) = \frac{P(H_k)\prod_i p_{k,i}^{n_i}}{\sum_j P(H_j)\prod_i p_{j,i}^{n_i}}
+$$
+
 - **Implementación estable numéricamente:**  
-    $$  
-    s_k = \log P(H_k) + \sum_i n_i\log(p_{k,i}+\varepsilon), \quad  
-    P(H_k\mid\mathbf{n}) = \text{softmax}(s_k)  
-    $$
+
+$$  
+s_k = \log P(H_k) + \sum_i n_i\log(p_{k,i}+\varepsilon), \quad  
+P(H_k\mid\mathbf{n}) = \text{softmax}(s_k)  
+$$
     
 - **Salida:**
     
