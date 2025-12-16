@@ -27,6 +27,7 @@ class ImgPreprocCfg:
 	close_ksize: int = 3
 	
 	flag_BnW: bool = False
+	otsu: bool = True
 
 
 @dataclass(slots=True)
@@ -59,7 +60,7 @@ class ImgPreproc:
 		- `meta`  : detalles geométricos del objeto detectado (o `None`).
 		"""
 
-		mask_obj = self._normalizar(img_color)
+		mask_obj = self._normalizar(img_color, otsu=self.config.otsu)
 		
 		img_sq, mask_sq = self._recortar(img_color, mask_obj)
 		
@@ -78,6 +79,8 @@ class ImgPreproc:
 	def _normalizar(
 		self,
 		img: ImgColor,
+		*,
+		otsu: bool = True
 		) -> Mask:
 		"""
 		Segmenta el objeto dominante de la imagen usando umbralización de Otsu.
@@ -106,12 +109,23 @@ class ImgPreproc:
 		gray_blur = cv.GaussianBlur(src=gray, ksize=(0, 0), sigmaX=self.config.sigma)
 
 		# Aplicar Otsu
-		_, mask = cv.threshold(
-			gray_blur,
-			0,
-			255,
-			cv.THRESH_BINARY_INV + cv.THRESH_OTSU
-		)
+		if otsu:
+			_, mask = cv.threshold(
+				gray_blur,
+				0,
+				255,
+				cv.THRESH_BINARY_INV + cv.THRESH_OTSU
+			)
+		else:
+			mask = cv.adaptiveThreshold(
+				gray_blur,
+				255,
+				cv.ADAPTIVE_THRESH_GAUSSIAN_C,
+				cv.THRESH_BINARY_INV,
+				blockSize=51,
+				C=5
+			)
+
 
 		return mask
 

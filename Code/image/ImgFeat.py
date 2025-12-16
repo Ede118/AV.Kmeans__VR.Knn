@@ -149,6 +149,10 @@ class ImgFeat:
 				hull_area = float(cv2.contourArea(hull)) if hull is not None else 0.0
 				rect = cv2.minAreaRect(contour)
 
+		if huecos > 1:
+			huecos = 1
+		
+
 		hole_area = max(area - mask_area, 0.0)
 		hole_area_ratio = hole_area / (area + 1e-9)
 		circularity = (4.0 * np.pi * area) / (perimeter * perimeter + 1e-9)
